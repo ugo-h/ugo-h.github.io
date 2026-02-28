@@ -110,6 +110,7 @@ function makePlayer() {
     boardLostX: 0, boardLostY: 0,
 
     boardDistance: 0,
+    popOffsetX: 0,
   };
 }
 
@@ -313,7 +314,9 @@ function tryLandTrick(p) {
   const names = { [TRICK.KICKFLIP]: 'KICKFLIP!', [TRICK.SHOVEIT]: 'SHOVE-IT!', [TRICK.T180]: '180!' };
   const pts   = { [TRICK.KICKFLIP]: 120, [TRICK.SHOVEIT]: 80, [TRICK.T180]: 100 };
   score += pts[p.trick] || 0;
-  showMsg(names[p.trick] || 'TRICK!', C.green);
+  const fakiePrefix = p.fakie ? 'FAKIE ' : '';
+
+  showMsg(fakiePrefix + names[p.trick] || 'TRICK!', C.green);
   spawnParticles(p.x + PW / 2, p.y, 10, C.green);
   resetTrick(p, true); // landed = true
 }
@@ -358,22 +361,32 @@ function updateOllie(p, dt) {
     p.ollieTimer -= dt;
     // Rotate nose up (negative = nose up), tail stays
     const t = 1 - clamp(p.ollieTimer / 0.06, 0, 1);
-    p.boardNoseAngle = lerp(0, -0.4, t);   // nose lifts
-    p.boardTailAngle = lerp(0,  0.15, t);  // tail presses down
+
+    p.boardNoseAngle = lerp(0, 0.4, t);   // nose lifts
+    p.boardTailAngle = lerp(0,  -0.15, t);  // tail presses down
 
     p.boardDistance = lerp(0, 10, t);
+    p.popOffsetX = lerp(0, 5 * (p.fakie ? 4 : -1), t);
     if (p.ollieTimer <= 0) {
       // Actually jump
       p.vy = CFG.JUMP_VEL;
       p.onGround = false;
       p.olliePhase = 2;
-      p.boardNoseAngle = -4.3;
-      p.boardTailAngle = 4.1;
+
+      if (p.fakie) {
+        p.boardNoseAngle = -4.3;
+        p.boardTailAngle = -4.1;
+      } else {
+        p.boardNoseAngle = 4.3;
+        p.boardTailAngle = 4.1;
+      }
     }
   } else if (p.olliePhase === 2) {
     // Gradually level board while in air
     p.boardNoseAngle = lerp(p.boardNoseAngle, 0, dt * 6);
     p.boardTailAngle = lerp(p.boardTailAngle, 0, dt * 6);
+
+    p.popOffetX = lerp(p.popOffsetX, 0, dt * 6);
 
     if (!p.trickDone) {
       p.boardDistance = lerp(p.boardDistance, 0, dt * 6);
@@ -655,7 +668,7 @@ function drawDraculaFace(ctx, headCX, headCY, headW, facingSign) {
 }
 
 function drawPlayer(ctx, p) {
-  const cx    = p.x + PW / 2;
+  const cx    = p.x + PW / 2 + p.popOffsetX;
   const footY = p.y + PH + p.boardDistance ;
   const ang   = p.trickAngle;
 
@@ -707,7 +720,7 @@ function drawPlayer(ctx, p) {
                   : BW;
 
   // --- Ollie tilt amount (0-1) ---
-  const noseLift = -p.boardNoseAngle;
+  const noseLift = p.boardNoseAngle;
   const tailDip = p.boardTailAngle;
 
   // ─────────────────────────────────────────────────────────────────────────
