@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Skater - Dracula Edition</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #282a36; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; flex-direction: column; }
+    canvas { display: block; }
+    #info { color: #6272a4; font-family: monospace; font-size: 12px; margin-top: 6px; }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="info">SPACE: Ollie | K: Kickflip | F: Shove-it | 1: 180 — Press SPACE to land tricks</div>
+<script type="application/json" id="cfg">
+{
+  "W": 900, "H": 480,
+  "GRAVITY": 1400,
+  "JUMP_VEL": -600,
+  "MOVE_SPEED": 280,
+  "GROUND_Y": 390,
+  "SCORE_PER_LIFE": 500,
+  "colors": {
+    "bg":        "#282a36",
+    "bg2":       "#1e2029",
+    "ground":    "#44475a",
+    "player":    "#bd93f9",
+    "board":     "#ff79c6",
+    "wheel":     "#f1fa8c",
+    "obstacle":  "#ff5555",
+    "obstacleH": "#ff6e6e",
+    "text":      "#f8f8f2",
+    "comment":   "#6272a4",
+    "cyan":      "#8be9fd",
+    "green":     "#50fa7b",
+    "orange":    "#ffb86c",
+    "flash":     "rgba(255,85,85,0.45)"
+  }
+}
+</script>
+<script>
+const CFG = JSON.parse(document.getElementById('cfg').textContent);
+const W = CFG.W, H = CFG.H;
+const C = CFG.colors;
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+canvas.width = W; canvas.height = H;
+
+// ── Input ──────────────────────────────────────────────────────────────────
+const keys = {}, justPressed = {};
+window.addEventListener('keydown', e => {
+  if (!keys[e.code]) justPressed[e.code] = true;
+  keys[e.code] = true;
+  if (['Space','KeyK','KeyF','Digit1','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault();
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+function consumeJust(code) { const v = justPressed[code]; justPressed[code] = false; return v; }
+function clearJust() { for (const k in justPressed) justPressed[k] = false; }
+
+// ── Math ───────────────────────────────────────────────────────────────────
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp  = (a, b, t) => a + (b - a) * t;
+const rand  = (a, b) => a + Math.random() * (b - a);
+
+// ── Constants ──────────────────────────────────────────────────────────────
+const GROUND_Y    = CFG.GROUND_Y;
+const PW = 22, PH = 30;          // player dims
+const HEAD_W = 18, HEAD_H = 16;  // bigger head for Dracula face
+const BW = 46, BH = 10;          // board dims
+const BOARD_OFFSET_Y = 10;       // board below player feet
+const WHEEL_R = 5;
+
+// Trick states
+const TRICK = { NONE: 0, KICKFLIP: 1, SHOVEIT: 2, T180: 3 };
+
+// ── Player ─────────────────────────────────────────────────────────────────
+function makePlayer() {
+  return {
+    x: 120, y: GROUND_Y - PH,
+    vx: CFG.MOVE_SPEED, vy: 0,
+    onGround: true,
+    // Ollie anim
+    olliePhase: 0, // 0=none, 1=nose lift, 2=full jump, 3=landing
+    ollieTimer: 0,
+    // Trick
+    trick: TRICK.NONE,
+    trickAngle: 0,        // animation angle (radians)
+    trickTarget: 0,
+    trickSpeed: 0,
+    trickDone: false,
+    trickAxis: 'z',       // 'x','y','z'
+    trickLandWindow: false,
+    trickFailed: false,
+    boardDetached: false,
+    // 180 body scale (Y-axis simulation)
+    bodyScaleX: 1,  // 1 = forward, -1 = fakie (after landed 180)
+    fakie: false,   // are we riding backwards?
+    // Board nose lift
+    boardNoseAngle: 0,
+    boardTailAngle: 0,
+    // Visual
+    alive: true,
+    dying: false,
+    deathTimer: 0,
+    deathDuration: 0.7,
+    flashTimer: 0,
+    // camera offset x
+    boardLostX: 0, boardLostY: 0,
+  };
+}
+
+// ── World ──────────────────────────────────────────────────────────────────
+let camX = 0;
+let score = 0;
+let lives = 3;
+let livesFromScore = 0; // how many score-based lives given
+let gameState = 'title'; // title, playing, gameover
+let flashTimer = 0;
+let flashColor = C.flash;
+let screenMsg = '';
+let screenMsgTimer = 0;
+let particles = [];
+
+// ── Obstacles ──────────────────────────────────────────────────────────────
+function makeObstacle(x) {
+  const h = rand(25, 55) | 0;
+  return { x, y: GROUND_Y - h, w: 22, h, cleared: false, hit: false };
+}
+
+function generateObstacles(startX, count) {
+  const obs = [];
+  let x = startX;
+  for (let i = 0; i < count; i++) {
+    x += rand(280, 480);
+    obs.push(makeObstacle(x));
+  }
+  return obs;
+}
+
+// ── Game state init ────────────────────────────────────────────────────────
+let player, obstacles, worldX;
+
+function initGame() {
+  player = makePlayer();
+  obstacles = generateObstacles(400, 40);
+  worldX = 0;
+  camX = 0;
+  score = 0;
+  lives = 3;
+  livesFromScore = 0;
+  flashTimer = 0;
+  particles = [];
+  deathPieces = [];
+}
+
+// ── Particles ──────────────────────────────────────────────────────────────
+function spawnParticles(x, y, n, color) {
+  for (let i = 0; i < n; i++) {
+    const angle = rand(0, Math.PI * 2);
+    const speed = rand(80, 260);
+    const life = rand(0.4, 0.9);
+    particles.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed - 100, life, maxLife: life, color, r: rand(2, 5) });
+  }
+}
+
+function updateParticles(dt) {
+  for (const p of particles) {
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    p.vy += 600 * dt;
+    p.life -= dt;
+  }
+  particles = particles.filter(p => p.life > 0);
+}
+
+// Death pieces — physics objects that draw themselves as rects or circles
+let deathPieces = [];
+
+function spawnDeathEffect(p) {
+  const cx = p.x + PW / 2;
+  const cy = p.y + PH / 2;
+  const boardCX = cx;
+  const boardCY = p.y + PH + BOARD_OFFSET_Y;
+
+  deathPieces = [];
+
+  // Player body chunks — cape (dark purple) and head (cyan/pale) pieces
+  const colors = ['#2d1b4e','#2d1b4e','#2d1b4e','#44475a','#f8f8f2','#ff5555','#bd93f9'];
+  for (let i = 0; i < 16; i++) {
+    const angle = rand(0, Math.PI * 2);
+    const speed = rand(120, 400);
+    const life = rand(0.6, 1.3);
+    deathPieces.push({
+      type: 'rect',
+      x: cx + rand(-PW/2, PW/2),
+      y: p.y + rand(0, PH + HEAD_H),
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed - rand(80, 220),
+      rot: rand(0, Math.PI * 2),
+      rotSpeed: rand(-8, 8),
+      w: rand(3, 10), h: rand(3, 10),
+      life, maxLife: life,
+      color: colors[i % colors.length]
+    });
+  }
+
+  // Board — flies off as a single piece with spin
+  const boardLife = 1.2;
+  deathPieces.push({
+    type: 'board',
+    x: boardCX, y: boardCY,
+    vx: rand(-60, -20), vy: rand(-300, -180),
+    rot: 0, rotSpeed: rand(4, 8),
+    life: boardLife, maxLife: boardLife,
+    color: C.board
+  });
+
+  // Two wheels — fly off in opposite directions
+  for (let i = 0; i < 2; i++) {
+    const dir = i === 0 ? -1 : 1;
+    const life = rand(0.8, 1.1);
+    deathPieces.push({
+      type: 'wheel',
+      x: boardCX + dir * (BW / 2 - 9), y: boardCY + WHEEL_R * 0.5,
+      vx: dir * rand(150, 300), vy: rand(-350, -200),
+      rot: 0, rotSpeed: dir * rand(10, 18),
+      r: WHEEL_R + 1,
+      life, maxLife: life,
+      color: C.wheel
+    });
+  }
+}
+
+function updateDeathPieces(dt) {
+  for (const p of deathPieces) {
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    p.vy += 900 * dt;  // gravity
+    p.rot += p.rotSpeed * dt;
+    p.life -= dt;
+  }
+  deathPieces = deathPieces.filter(p => p.life > 0);
+}
+
+function drawDeathPieces(ctx) {
+  for (const p of deathPieces) {
+    const t = p.life / p.maxLife;
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, t * 1.5);
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.rot);
+    if (p.type === 'rect') {
+      ctx.fillStyle = p.color;
+      ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+    } else if (p.type === 'board') {
+      // draw simplified board shape
+      ctx.fillStyle = p.color;
+      const bw = BW, bh = BH, kick = 4, x0 = -bw/2, y0 = 0;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0 - kick); ctx.lineTo(x0 + 6, y0);
+      ctx.lineTo(x0 + bw - 6, y0); ctx.lineTo(x0 + bw, y0 - kick);
+      ctx.lineTo(x0 + bw, y0 - bh); ctx.lineTo(x0, y0 - bh);
+      ctx.closePath(); ctx.fill();
+    } else if (p.type === 'wheel') {
+      ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(0, 0, p.r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+}
+
+// ── Trick logic ────────────────────────────────────────────────────────────
+function startTrick(p, type) {
+  if (p.trick !== TRICK.NONE || p.onGround || p.trickFailed) return;
+  p.trick = type;
+  p.trickAngle = 0;
+  p.trickDone = false;
+  p.trickLandWindow = false;
+
+  if (type === TRICK.KICKFLIP) {
+    p.trickTarget = Math.PI * 2; // 360 around X
+    p.trickSpeed = Math.PI * 4.5;
+    p.trickAxis = 'x';
+  } else if (type === TRICK.SHOVEIT) {
+    p.trickTarget = Math.PI;     // 180 around Y
+    p.trickSpeed = Math.PI * 3.5;
+    p.trickAxis = 'y';
+  } else if (type === TRICK.T180) {
+    p.trickTarget = Math.PI;     // 180 around Y axis (scaleX sim)
+    p.trickSpeed = Math.PI * 3.2;
+    p.trickAxis = 'y180';        // custom: Y-axis whole-body
+  }
+}
+
+function updateTrick(p, dt) {
+  if (p.trick === TRICK.NONE) return;
+  if (p.trickDone) return;
+
+  p.trickAngle += p.trickSpeed * dt;
+  if (p.trickAngle >= p.trickTarget - 0.05) {
+    p.trickAngle = p.trickTarget;
+    p.trickDone = true;
+    p.trickLandWindow = true; // player must press Space to land
+  }
+}
+
+function tryLandTrick(p) {
+  if (!p.trickDone || !p.trickLandWindow || p.onGround) return;
+  const names = { [TRICK.KICKFLIP]: 'KICKFLIP!', [TRICK.SHOVEIT]: 'SHOVE-IT!', [TRICK.T180]: '180!' };
+  const pts   = { [TRICK.KICKFLIP]: 120, [TRICK.SHOVEIT]: 80, [TRICK.T180]: 100 };
+  score += pts[p.trick] || 0;
+  showMsg(names[p.trick] || 'TRICK!', C.green);
+  spawnParticles(p.x + PW / 2, p.y, 10, C.green);
+  resetTrick(p, true); // landed = true
+}
+
+function resetTrick(p, landed) {
+  const wasTrick = p.trick;
+  p.trick = TRICK.NONE;
+  p.trickAngle = 0;
+  p.trickTarget = 0;
+  p.trickDone = false;
+  p.trickLandWindow = false;
+  p.boardDetached = false;
+  p.trickAxis = 'z';
+  // On successful 180 landing, flip fakie state
+  if (landed && wasTrick === TRICK.T180) {
+    p.fakie = !p.fakie;
+    p.bodyScaleX = p.fakie ? -1 : 1;
+  }
+}
+
+function failTrick(p) {
+  if (p.trickFailed || p.dying) return;
+  p.trickFailed = true;
+  p.boardDetached = true;
+  p.boardLostX = p.x;
+  p.boardLostY = p.y + PH + BOARD_OFFSET_Y;
+  resetTrick(p, false);
+  loseLife('BAILED!');
+}
+
+// ── Ollie animation ────────────────────────────────────────────────────────
+// Phase: 0=idle, 1=nose dip (pop), 2=in air, 3=landing crouch
+function startOllie(p) {
+  if (!p.onGround || p.olliePhase !== 0) return;
+  p.olliePhase = 1;
+  p.ollieTimer = 0.06; // nose dip duration
+  p.boardNoseAngle = 0;
+}
+
+function updateOllie(p, dt) {
+  if (p.olliePhase === 1) {
+    p.ollieTimer -= dt;
+    // Rotate nose up (negative = nose up), tail stays
+    const t = 1 - clamp(p.ollieTimer / 0.06, 0, 1);
+    p.boardNoseAngle = lerp(0, -0.4, t);   // nose lifts
+    p.boardTailAngle = lerp(0,  0.15, t);  // tail presses down
+    if (p.ollieTimer <= 0) {
+      // Actually jump
+      p.vy = CFG.JUMP_VEL;
+      p.onGround = false;
+      p.olliePhase = 2;
+      p.boardNoseAngle = -0.3;
+      p.boardTailAngle = 0.1;
+    }
+  } else if (p.olliePhase === 2) {
+    // Gradually level board while in air
+    p.boardNoseAngle = lerp(p.boardNoseAngle, 0, dt * 6);
+    p.boardTailAngle = lerp(p.boardTailAngle, 0, dt * 6);
+  } else if (p.olliePhase === 3) {
+    // Landing
+    p.ollieTimer -= dt;
+    if (p.ollieTimer <= 0) p.olliePhase = 0;
+  }
+}
+
+// ── Life / messaging ───────────────────────────────────────────────────────
+function triggerDeathAnimation(reason) {
+  if (player.dying) return; // already dying
+  player.dying = true;
+  player.alive = false;
+  player.deathTimer = player.deathDuration; // 0.7s
+  player.vx = 0; // freeze movement
+  spawnDeathEffect(player);
+  flashTimer = 0.4;
+  flashColor = C.flash;
+  showMsg(reason, C.obstacle);
+}
+
+function loseLife(reason) {
+  if (player.dying) return;
+  lives = Math.max(0, lives - 1);
+  triggerDeathAnimation(reason + (lives > 0 ? '  ❤ x' + lives : ''));
+  // Transition will happen in update once death anim finishes
+}
+
+function showMsg(msg, color) {
+  screenMsg = msg;
+  screenMsgTimer = 1.8;
+  screenMsgColor = color || C.text;
+}
+let screenMsgColor = C.text;
+
+// ── Update player ──────────────────────────────────────────────────────────
+function updatePlayer(dt) {
+  const p = player;
+
+  // ── Dying state: freeze player, let death anim play, then transition ──
+  if (p.dying) {
+    p.deathTimer -= dt;
+    updateDeathPieces(dt);
+    if (p.deathTimer <= 0) {
+      p.dying = false;
+      if (lives <= 0) {
+        gameState = 'gameover';
+      } else {
+        // Respawn: reset player in place but keep score/lives/obstacles
+        const savedX = p.x;
+        const newP = makePlayer();
+        // Restart a bit behind current camera so they have runway
+        newP.x = Math.max(120, camX + 80);
+        newP.y = GROUND_Y - PH;
+        newP.fakie = false;
+        newP.bodyScaleX = 1;
+        player = newP;
+        deathPieces = [];
+        screenMsg = '';
+      }
+    }
+    return;
+  }
+
+  if (!p.alive) return;
+
+  // Score → life bonus
+  const lifeThreshold = CFG.SCORE_PER_LIFE;
+  const earned = Math.floor(score / lifeThreshold);
+  if (earned > livesFromScore) {
+    const gained = earned - livesFromScore;
+    livesFromScore = earned;
+    lives += gained;
+    showMsg('+' + gained + ' LIFE!', C.green);
+    flashTimer = 0.2;
+    flashColor = 'rgba(80,250,123,0.3)';
+  }
+
+  // Constant horizontal movement
+  p.x += p.vx * dt;
+
+  // Gravity
+  if (!p.onGround) {
+    p.vy += CFG.GRAVITY * dt;
+  }
+  p.y += p.vy * dt;
+
+  // Land on ground
+  const groundTop = GROUND_Y - PH;
+  if (p.y >= groundTop) {
+    p.y = groundTop;
+    if (!p.onGround) {
+      // Landing
+      if (p.trick !== TRICK.NONE && !p.trickDone) {
+        // Landed mid-trick without pressing Space
+        failTrick(p);
+      } else if (p.trick !== TRICK.NONE && p.trickLandWindow) {
+        // trickLandWindow=true but didn't press Space = also fail
+        failTrick(p);
+      }
+      p.onGround = true;
+      p.olliePhase = 3;
+      p.ollieTimer = 0.1;
+      p.trickFailed = false;
+    }
+    p.vy = 0;
+  }
+
+  // Ollie input
+  if (consumeJust('Space')) {
+    if (p.onGround) {
+      startOllie(p);
+    } else if (p.trick !== TRICK.NONE && p.trickDone && p.trickLandWindow) {
+      tryLandTrick(p);
+    } else if (p.trick !== TRICK.NONE && !p.trickDone) {
+      // pressed space too early — fail
+      failTrick(p);
+    }
+  }
+
+  // Trick inputs (only in air)
+  if (!p.onGround) {
+    if (consumeJust('KeyK')) startTrick(p, TRICK.KICKFLIP);
+    if (consumeJust('KeyF')) startTrick(p, TRICK.SHOVEIT);
+    if (consumeJust('Digit1')) startTrick(p, TRICK.T180);
+  }
+
+  updateOllie(p, dt);
+  updateTrick(p, dt);
+
+  // Obstacle collision
+  for (const obs of obstacles) {
+    if (obs.cleared || obs.hit) continue;
+    const px2 = p.x + PW, py2 = p.y + PH;
+    const ox2 = obs.x + obs.w;
+    // Cleared = passed beyond obstacle
+    if (p.x > ox2) {
+      obs.cleared = true;
+      score += 30;
+      showMsg('+30  CLEARED!', C.cyan);
+      spawnParticles(obs.x + obs.w / 2, obs.y, 6, C.cyan);
+      continue;
+    }
+    // Hit check: player rect vs obstacle rect
+    if (p.x < ox2 && px2 > obs.x && p.y < obs.y + obs.h && py2 > obs.y) {
+      obs.hit = true;
+      loseLife('HIT OBSTACLE!');
+      // loseLife triggers death animation; stop processing
+      return;
+    }
+  }
+
+  // Camera
+  camX = p.x - 160;
+}
+
+// ── Draw helpers ──────────────────────────────────────────────────────────
+function drawDraculaFace(ctx, facing, headW, headH) {
+  // facing: 1 = right (normal), -1 = left (fakie)
+  // ctx is already translated to head center
+
+  // Pale skin head
+  ctx.fillStyle = '#f8f8f2';
+  ctx.fillRect(-headW/2, -headH/2, headW, headH);
+
+  // Slick widow's peak hair (dark, pointing down in center)
+  ctx.fillStyle = '#1a1a2e';
+  // Main hair block on top
+  ctx.fillRect(-headW/2, -headH/2 - 9, headW, 10);
+  // Widow's peak triangle
+  ctx.beginPath();
+  ctx.moveTo(-4, -headH/2 + 1);
+  ctx.lineTo(4, -headH/2 + 1);
+  ctx.lineTo(0, -headH/2 + 6);
+  ctx.closePath();
+  ctx.fill();
+  // Side hair swoops
+  ctx.fillRect(-headW/2, -headH/2 - 2, 4, 6);
+  ctx.fillRect(headW/2 - 4, -headH/2 - 2, 4, 6);
+
+  // Eyes — facing direction matters
+  const eyeOffX = facing * 2; // shift eyes toward the direction of travel
+  ctx.fillStyle = '#ff5555';
+  // left eye
+  ctx.fillRect(eyeOffX - 5, -headH/2 + 3, 3, 3);
+  // right eye
+  ctx.fillRect(eyeOffX + 2, -headH/2 + 3, 3, 3);
+  // white glint in eyes
+  ctx.fillStyle = '#f8f8f2';
+  ctx.fillRect(eyeOffX - 4, -headH/2 + 3, 1, 1);
+  ctx.fillRect(eyeOffX + 3, -headH/2 + 3, 1, 1);
+
+  // Fangs
+  ctx.fillStyle = '#f8f8f2';
+  ctx.fillRect(eyeOffX - 2, headH/2 - 1, 2, 4);  // left fang
+  ctx.fillRect(eyeOffX + 2, headH/2 - 1, 2, 4);  // right fang
+
+  // Subtle smile line
+  ctx.strokeStyle = '#6272a4';
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.moveTo(eyeOffX - 3, headH/2 - 4);
+  ctx.lineTo(eyeOffX + 3, headH/2 - 4);
+  ctx.stroke();
+}
+
+function drawPlayer(ctx, p) {
+  const cx = p.x + PW / 2;
+  const footY = p.y + PH;
+
+  // ── Compute whole-body scaleX for 180 trick ──
+  // During 180, we scale the entire player+board on X through cos(trickAngle)
+  // After landing, bodyScaleX persists as -1 or 1
+  let wholeScaleX = p.bodyScaleX ?? 1;
+  if (p.trick === TRICK.T180) {
+    wholeScaleX = (p.bodyScaleX ?? 1) * Math.cos(p.trickAngle);
+  }
+
+  // facing direction: positive scaleX = facing right
+  const facing = wholeScaleX >= 0 ? 1 : -1;
+
+  // ── Draw board first (behind player) ──
+  const boardCX = cx;
+  const boardCY = footY + BOARD_OFFSET_Y;
+
+  ctx.save();
+  ctx.translate(boardCX, boardCY);
+  ctx.scale(wholeScaleX < 0.04 && wholeScaleX > -0.04 ? 0.04 * Math.sign(wholeScaleX || 1) : wholeScaleX, 1);
+
+  if (!p.boardDetached) {
+    // Apply ollie angle
+    ctx.rotate((p.boardNoseAngle + p.boardTailAngle) / 2);
+
+    // Board-specific trick transforms (kickflip / shove-it) on top
+    if (p.trick === TRICK.KICKFLIP) {
+      const sy = Math.abs(Math.cos(p.trickAngle));
+      ctx.scale(1, sy < 0.05 ? 0.05 : sy);
+    } else if (p.trick === TRICK.SHOVEIT) {
+      const sx = Math.cos(p.trickAngle);
+      ctx.scale(sx < 0.05 && sx > -0.05 ? 0.05 : sx, 1);
+    }
+
+    const bw = BW, bh = BH, kick = 4, x0 = -bw/2, y0 = 0;
+    let boardCol = C.board;
+    if (p.trick === TRICK.KICKFLIP && Math.sin(p.trickAngle) < 0) boardCol = C.orange;
+    ctx.fillStyle = boardCol;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0 - kick); ctx.lineTo(x0 + 6, y0);
+    ctx.lineTo(x0 + bw - 6, y0); ctx.lineTo(x0 + bw, y0 - kick);
+    ctx.lineTo(x0 + bw, y0 - bh); ctx.lineTo(x0, y0 - bh);
+    ctx.closePath(); ctx.fill();
+    // Wheels
+    ctx.fillStyle = C.wheel;
+    ctx.beginPath(); ctx.arc(x0 + 9, y0 + WHEEL_R * 0.5, WHEEL_R, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x0 + bw - 9, y0 + WHEEL_R * 0.5, WHEEL_R, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+
+  // ── Draw player body ──
+  ctx.save();
+  ctx.translate(cx, p.y + PH / 2);
+  ctx.scale(wholeScaleX < 0.04 && wholeScaleX > -0.04 ? 0.04 * Math.sign(wholeScaleX || 1) : wholeScaleX, 1);
+
+  // Cape / body (dark with purple tint)
+  ctx.fillStyle = '#2d1b4e';  // dark dracula cape
+  ctx.fillRect(-PW/2, -PH/2, PW, PH);
+
+  // Cape lapels / collar (inner lighter strip)
+  ctx.fillStyle = '#44475a';
+  ctx.fillRect(-PW/2 + 5, -PH/2, PW - 10, PH * 0.6);
+
+  // Cape wings slightly wider at bottom
+  ctx.fillStyle = '#1a0d30';
+  ctx.fillRect(-PW/2 - 2, -PH/2 + 8, 4, PH - 10);   // left wing
+  ctx.fillRect(PW/2 - 2, -PH/2 + 8, 4, PH - 10);    // right wing
+
+  // Head — drawn above body
+  const headCY = -PH/2 - HEAD_H/2 - 1;
+  drawDraculaFace(ctx, facing, HEAD_W, HEAD_H);
+
+  ctx.restore();
+
+  // ── Detached board flies away ──
+  if (p.boardDetached) {
+    ctx.save();
+    ctx.translate(p.boardLostX + PW/2, p.boardLostY);
+    const bw = BW, bh = BH, kick = 4, x0 = -bw/2, y0 = 0;
+    ctx.fillStyle = C.board;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0 - kick); ctx.lineTo(x0 + 6, y0);
+    ctx.lineTo(x0 + bw - 6, y0); ctx.lineTo(x0 + bw, y0 - kick);
+    ctx.lineTo(x0 + bw, y0 - bh); ctx.lineTo(x0, y0 - bh);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ── Render ─────────────────────────────────────────────────────────────────
+function render() {
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, 0, W, H);
+
+  if (gameState === 'title') {
+    drawTitle();
+    return;
+  }
+  if (gameState === 'gameover') {
+    drawGameOver();
+    return;
+  }
+
+  // World
+  ctx.save();
+  ctx.translate(-camX, 0);
+
+  // Sky gradient
+  const grad = ctx.createLinearGradient(0, 0, 0, GROUND_Y);
+  grad.addColorStop(0, '#1e2029');
+  grad.addColorStop(1, '#282a36');
+  ctx.fillStyle = grad;
+  ctx.fillRect(camX, 0, W, GROUND_Y);
+
+  // Ground
+  ctx.fillStyle = C.ground;
+  ctx.fillRect(camX - 20, GROUND_Y, W + 40, H - GROUND_Y);
+
+  // Ground detail
+  ctx.fillStyle = '#3a3d4e';
+  ctx.fillRect(camX - 20, GROUND_Y, W + 40, 4);
+
+  // Obstacles
+  for (const obs of obstacles) {
+    if (obs.x + obs.w < camX - 20 || obs.x > camX + W + 20) continue;
+    ctx.fillStyle = obs.hit ? '#333' : C.obstacle;
+    ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
+    // top cap
+    ctx.fillStyle = obs.hit ? '#444' : C.obstacleH;
+    ctx.fillRect(obs.x - 2, obs.y, obs.w + 4, 5);
+  }
+
+  // Particles
+  for (const p of particles) {
+    const t = p.life / p.maxLife;
+    ctx.globalAlpha = t;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r * t, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // Death pieces
+  drawDeathPieces(ctx);
+
+  // Player (only when alive and not dying)
+  if (!player.dying && player.alive) {
+    drawPlayer(ctx, player);
+  }
+
+  ctx.restore();
+
+  // HUD
+  drawHUD();
+
+  // Flash
+  if (flashTimer > 0) {
+    ctx.fillStyle = flashColor;
+    ctx.globalAlpha = flashTimer / 0.35;
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1;
+  }
+
+  // Message
+  if (screenMsgTimer > 0) {
+    ctx.save();
+    ctx.font = 'bold 28px monospace';
+    ctx.textAlign = 'center';
+    const alpha = Math.min(1, screenMsgTimer);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = screenMsgColor || C.text;
+    ctx.fillText(screenMsg, W / 2, H / 2 - 40);
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawHUD() {
+  ctx.font = 'bold 18px monospace';
+  ctx.fillStyle = C.text;
+  ctx.textAlign = 'left';
+  ctx.fillText('SCORE: ' + score, 16, 28);
+
+  // Lives
+  ctx.fillStyle = C.orange;
+  ctx.fillText('❤ x' + lives, 16, 52);
+
+  // Fakie indicator
+  if (player.fakie) {
+    ctx.fillStyle = C.board;
+    ctx.font = 'bold 20px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('🛹 Fakie!', 16, 78);
+  }
+
+  // Trick hint
+  if (!player.onGround && player.trick === TRICK.NONE) {
+    ctx.fillStyle = C.comment;
+    ctx.font = '13px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('K=Kickflip  F=Shove-it  1=180', W / 2, 24);
+  } else if (!player.onGround && player.trickDone && player.trickLandWindow) {
+    ctx.fillStyle = C.green;
+    ctx.font = 'bold 16px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('⬇ PRESS SPACE TO LAND!', W / 2, 24);
+  }
+
+  // Score to next life
+  const nextLife = (Math.floor(score / CFG.SCORE_PER_LIFE) + 1) * CFG.SCORE_PER_LIFE;
+  const pct = (score % CFG.SCORE_PER_LIFE) / CFG.SCORE_PER_LIFE;
+  ctx.fillStyle = C.comment;
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText('Next life: ' + nextLife, W - 16, 28);
+  // progress bar
+  ctx.fillStyle = '#44475a';
+  ctx.fillRect(W - 130, 34, 114, 7);
+  ctx.fillStyle = C.green;
+  ctx.fillRect(W - 130, 34, 114 * pct, 7);
+}
+
+function drawTitle() {
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = C.player;
+  ctx.font = 'bold 56px monospace';
+  ctx.fillText('SKATER', W / 2, H / 2 - 70);
+
+  ctx.fillStyle = C.board;
+  ctx.font = '20px monospace';
+  ctx.fillText('Dracula Edition', W / 2, H / 2 - 30);
+
+  ctx.fillStyle = C.text;
+  ctx.font = '16px monospace';
+  ctx.fillText('SPACE – Ollie', W / 2, H / 2 + 20);
+  ctx.fillText('K – Kickflip  |  F – Shove-it  |  1 – 180', W / 2, H / 2 + 45);
+  ctx.fillText('After trick completes: press SPACE to land', W / 2, H / 2 + 70);
+
+  ctx.fillStyle = C.green;
+  ctx.font = 'bold 18px monospace';
+  ctx.fillText('Press SPACE to Start', W / 2, H / 2 + 115);
+
+  ctx.fillStyle = C.comment;
+  ctx.font = '13px monospace';
+  ctx.fillText('Every ' + CFG.SCORE_PER_LIFE + ' points = +1 life  |  Cleared obstacle = +30 pts', W / 2, H / 2 + 148);
+}
+
+function drawGameOver() {
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = C.obstacle;
+  ctx.font = 'bold 52px monospace';
+  ctx.fillText('GAME OVER', W / 2, H / 2 - 50);
+  ctx.fillStyle = C.text;
+  ctx.font = '24px monospace';
+  ctx.fillText('Final Score: ' + score, W / 2, H / 2 + 10);
+  ctx.fillStyle = C.green;
+  ctx.font = 'bold 18px monospace';
+  ctx.fillText('Press SPACE for Title Screen', W / 2, H / 2 + 60);
+}
+
+// ── Update ─────────────────────────────────────────────────────────────────
+function update(dt) {
+  if (gameState === 'title') {
+    if (consumeJust('Space')) {
+      gameState = 'playing';
+      initGame();
+    }
+    return;
+  }
+  if (gameState === 'gameover') {
+    if (consumeJust('Space')) {
+      gameState = 'title';
+    }
+    return;
+  }
+
+  updatePlayer(dt);
+  updateParticles(dt);
+  // deathPieces are updated inside updatePlayer's dying branch,
+  // but also keep updating them after respawn until they're gone
+  if (!player.dying) updateDeathPieces(dt);
+
+  if (flashTimer > 0) flashTimer -= dt;
+  if (screenMsgTimer > 0) screenMsgTimer -= dt;
+}
+
+// ── Loop ───────────────────────────────────────────────────────────────────
+let lastTime = 0;
+function loop(ts) {
+  const dt = Math.min((ts - lastTime) / 1000, 0.05);
+  lastTime = ts;
+  update(dt);
+  render();
+  clearJust();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
