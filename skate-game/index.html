@@ -68,7 +68,7 @@ const rand  = (a, b) => a + Math.random() * (b - a);
 const GROUND_Y    = CFG.GROUND_Y;
 const PW = 22, PH = 30;          // player dims
 const HEAD_W = 18, HEAD_H = 16;  // bigger head for Dracula face
-const BW = 46, BH = 10;          // board dims
+const BW = 46, BH = 5;          // board dims
 const BOARD_OFFSET_Y = 10;       // board below player feet
 const WHEEL_R = 5;
 
@@ -283,7 +283,7 @@ function startTrick(p, type) {
 
   if (type === TRICK.KICKFLIP) {
     p.trickTarget = Math.PI * 2; // 360 around X
-    p.trickSpeed = Math.PI * 4.5;
+    p.trickSpeed = Math.PI * 9.5;
     p.trickAxis = 'x';
   } else if (type === TRICK.SHOVEIT) {
     p.trickTarget = Math.PI;     // 180 around Y
@@ -291,7 +291,7 @@ function startTrick(p, type) {
     p.trickAxis = 'y';
   } else if (type === TRICK.T180) {
     p.trickTarget = Math.PI;     // 180 around Y axis (scaleX sim)
-    p.trickSpeed = Math.PI * 3.2;
+    p.trickSpeed = Math.PI * 7.2;
     p.trickAxis = 'y180';        // custom: Y-axis whole-body
   }
 }
@@ -707,9 +707,9 @@ function drawPlayer(ctx, p) {
 
   if (p.trick === TRICK.T180) {
     const c = Math.cos(ang);           // 1 → 0 → -1
-    bodyW     = Math.max(1, PW    * Math.abs(c));
-    headW     = Math.max(1, HEAD_W * Math.abs(c));
-    body180BW = Math.max(1, BW    * Math.abs(c));
+    bodyW     = Math.max(12, PW    * Math.abs(c));
+    headW     = Math.max(12, HEAD_W * Math.abs(c));
+    body180BW = Math.max(12, BW    * Math.abs(c));
     // Flip facing once we cross 90° (cos goes negative)
     facingSign = c >= 0 ? (p.bodyScaleX ?? 1) : -(p.bodyScaleX ?? 1);
   }
