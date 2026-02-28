@@ -525,144 +525,220 @@ function updatePlayer(dt) {
 }
 
 // ── Draw helpers ──────────────────────────────────────────────────────────
-function drawDraculaFace(ctx, facing, headW, headH) {
-  // facing: 1 = right (normal), -1 = left (fakie)
-  // ctx is already translated to head center
+//
+// All trick animation is done by computing visible dimensions using cos(angle),
+// never using ctx.scale / ctx.rotate for tricks.
+//
+// Kickflip  (X-axis spin): board HEIGHT crushes → 0 → negative (upside-down)
+//           angle goes 0 → 2π.  upsideDown when π/2 < angle < 3π/2.
+// Shove-it  (Y-axis spin): board WIDTH  crushes → 0 → back (flippedX)
+//           angle goes 0 → π.   flippedX when angle > π/2.
+// 180       (Y-axis spin, whole skater): body + board + head WIDTH crushes.
+//           facingSign flips once angle passes π/2, persists after landing.
 
-  // Pale skin head
+// Draw the board at absolute canvas coords (cx = board center X, cy = board base Y).
+// drawnW / drawnH: projected dimensions (already computed from 3D angle).
+// upsideDown: show underside + wheels on top.   flippedX: past-90 colour hint.
+// ollieT: 0-1 nose-lift amount.
+function drawBoard(ctx, cx, cy, drawnW, drawnH, upsideDown, flippedX, ollieT) {
+  const bw   = Math.max(1, drawnW);
+  const bh   = Math.max(1, Math.abs(drawnH));
+  const kick = Math.max(1, 4 * (bw / BW));
+  const wx   = bw / BW;                  // position scale for wheel / kick inset
+  const noseLift = ollieT * 8;
+  const tailDip  = ollieT * 3;
+  const x0 = cx - bw / 2;
+
+  if (upsideDown) {
+    // ── Underside visible: darker colour, wheels point UP ─────────────────
+    ctx.fillStyle = '#9b5e7a';
+    ctx.beginPath();
+    ctx.moveTo(x0,        cy + kick - tailDip);
+    ctx.lineTo(x0 + bw,  cy + kick + noseLift);
+    ctx.lineTo(x0 + bw,  cy + kick + noseLift - bh);
+    ctx.lineTo(x0,        cy + kick - tailDip  - bh);
+    ctx.closePath();
+    ctx.fill();
+    // Trucks visible as a dark stripe
+    ctx.fillStyle = '#44475a';
+    ctx.fillRect(x0 + 6*wx, cy - bh * 0.4, bw - 12*wx, bh * 0.35);
+    // Wheels above (upside-down board means wheels above the board silhouette)
+    ctx.fillStyle = C.wheel;
+    ctx.beginPath(); ctx.arc(x0 + 9*wx,      cy - bh - WHEEL_R, WHEEL_R, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x0+bw - 9*wx,   cy - bh - WHEEL_R, WHEEL_R, 0, Math.PI*2); ctx.fill();
+  } else {
+    // ── Top side: normal or slightly-past-90 hue ──────────────────────────
+    ctx.fillStyle = flippedX ? '#e060a8' : C.board;
+    ctx.beginPath();
+    ctx.moveTo(x0,                cy - kick + tailDip);    // tail end
+    ctx.lineTo(x0 + 6*wx,         cy);
+    ctx.lineTo(x0 + bw - 6*wx,    cy);
+    ctx.lineTo(x0 + bw,           cy - kick - noseLift);  // nose end
+    ctx.lineTo(x0 + bw,           cy - kick - noseLift - bh);
+    ctx.lineTo(x0,                cy - kick + tailDip  - bh);
+    ctx.closePath();
+    ctx.fill();
+    // Graphic strip so rotation is visible
+    if (bw > 12) {
+      ctx.fillStyle = 'rgba(255,255,255,0.12)';
+      ctx.fillRect(x0 + bw*0.28, cy - bh, bw*0.44, bh * 0.55);
+    }
+    // Wheels below
+    ctx.fillStyle = C.wheel;
+    ctx.beginPath(); ctx.arc(x0 + 9*wx,      cy + WHEEL_R*0.6, WHEEL_R, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x0+bw - 9*wx,   cy + WHEEL_R*0.6, WHEEL_R, 0, Math.PI*2); ctx.fill();
+  }
+}
+
+// Draw Dracula's head + hair. headCX/headCY = center of head in canvas coords.
+// headW = projected (crushed) width for 180 animation. facingSign = +1 or -1.
+function drawDraculaFace(ctx, headCX, headCY, headW, facingSign) {
+  const hw = Math.max(1, headW);
+  const hh = HEAD_H;
+  const x0 = headCX - hw / 2;
+  const y0 = headCY - hh / 2;
+  const s  = hw / HEAD_W;  // uniform scale for all face details
+
+  // Pale skin
   ctx.fillStyle = '#f8f8f2';
-  ctx.fillRect(-headW/2, -headH/2, headW, headH);
+  ctx.fillRect(x0, y0, hw, hh);
 
-  // Slick widow's peak hair (dark, pointing down in center)
+  // Hair mass + widow's peak
   ctx.fillStyle = '#1a1a2e';
-  // Main hair block on top
-  ctx.fillRect(-headW/2, -headH/2 - 9, headW, 10);
-  // Widow's peak triangle
+  ctx.fillRect(x0, y0 - 9*s, hw, 10*s);          // main hair block
+  // Peak triangle
   ctx.beginPath();
-  ctx.moveTo(-4, -headH/2 + 1);
-  ctx.lineTo(4, -headH/2 + 1);
-  ctx.lineTo(0, -headH/2 + 6);
-  ctx.closePath();
-  ctx.fill();
-  // Side hair swoops
-  ctx.fillRect(-headW/2, -headH/2 - 2, 4, 6);
-  ctx.fillRect(headW/2 - 4, -headH/2 - 2, 4, 6);
+  ctx.moveTo(headCX - 4*s, y0 + 1);
+  ctx.lineTo(headCX + 4*s, y0 + 1);
+  ctx.lineTo(headCX,        y0 + 6*s);
+  ctx.closePath(); ctx.fill();
+  // Side swoops
+  const sw = Math.max(1, 4*s);
+  ctx.fillRect(x0,         y0 - 2, sw, 6*s);
+  ctx.fillRect(x0+hw - sw, y0 - 2, sw, 6*s);
 
-  // Eyes — facing direction matters
-  const eyeOffX = facing * 2; // shift eyes toward the direction of travel
+  if (hw < 5) return; // too thin for face detail
+
+  // Eyes — shift toward facing direction
+  const shift = facingSign * 2 * s;
+  const ew = Math.max(1, 3*s);
+  const gap = 7*s;
   ctx.fillStyle = '#ff5555';
-  // left eye
-  ctx.fillRect(eyeOffX - 5, -headH/2 + 3, 3, 3);
-  // right eye
-  ctx.fillRect(eyeOffX + 2, -headH/2 + 3, 3, 3);
-  // white glint in eyes
-  ctx.fillStyle = '#f8f8f2';
-  ctx.fillRect(eyeOffX - 4, -headH/2 + 3, 1, 1);
-  ctx.fillRect(eyeOffX + 3, -headH/2 + 3, 1, 1);
+  ctx.fillRect(headCX + shift - gap/2 - ew, y0 + 3*s, ew, 3*s);
+  ctx.fillRect(headCX + shift + gap/2,       y0 + 3*s, ew, 3*s);
+  // Glints
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(headCX + shift - gap/2 - ew + 1, y0 + 3*s, 1, 1);
+  ctx.fillRect(headCX + shift + gap/2 + 1,       y0 + 3*s, 1, 1);
 
   // Fangs
-  ctx.fillStyle = '#f8f8f2';
-  ctx.fillRect(eyeOffX - 2, headH/2 - 1, 2, 4);  // left fang
-  ctx.fillRect(eyeOffX + 2, headH/2 - 1, 2, 4);  // right fang
-
-  // Subtle smile line
-  ctx.strokeStyle = '#6272a4';
-  ctx.lineWidth = 0.8;
-  ctx.beginPath();
-  ctx.moveTo(eyeOffX - 3, headH/2 - 4);
-  ctx.lineTo(eyeOffX + 3, headH/2 - 4);
-  ctx.stroke();
+  if (hw > 8) {
+    ctx.fillStyle = '#f8f8f2';
+    const fw = Math.max(1, 2*s);
+    ctx.fillRect(headCX + shift - 3*s, y0 + hh - 1, fw, 4*s);
+    ctx.fillRect(headCX + shift + 1*s, y0 + hh - 1, fw, 4*s);
+  }
 }
 
 function drawPlayer(ctx, p) {
-  const cx = p.x + PW / 2;
+  const cx    = p.x + PW / 2;
   const footY = p.y + PH;
+  const ang   = p.trickAngle;
 
-  // ── Compute whole-body scaleX for 180 trick ──
-  // During 180, we scale the entire player+board on X through cos(trickAngle)
-  // After landing, bodyScaleX persists as -1 or 1
-  let wholeScaleX = p.bodyScaleX ?? 1;
-  if (p.trick === TRICK.T180) {
-    wholeScaleX = (p.bodyScaleX ?? 1) * Math.cos(p.trickAngle);
+  // ─────────────────────────────────────────────────────────────────────────
+  // Compute projected dimensions for each trick — no ctx.scale/rotate used.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // --- Kickflip: board rotates around its long axis (X in 3D) ---
+  // Visible board HEIGHT = BH * cos(angle). Negative cos → upside-down.
+  let boardH       = BH;
+  let boardUpsideDown = false;
+  if (p.trick === TRICK.KICKFLIP) {
+    const c = Math.cos(ang);           // 1 → 0 → -1 → 0 → 1
+    boardH         = BH * Math.abs(c);
+    boardUpsideDown = c < 0;           // flipped when cos is negative
   }
 
-  // facing direction: positive scaleX = facing right
-  const facing = wholeScaleX >= 0 ? 1 : -1;
+  // --- Shove-it: board rotates around vertical axis (Y in 3D) ---
+  // Visible board WIDTH = BW * |cos(angle)|. Past 90° = flippedX.
+  let boardW      = BW;
+  let boardFlipped = false;
+  if (p.trick === TRICK.SHOVEIT) {
+    const c = Math.cos(ang);           // 1 → 0 (at 90°) → -1 (at 180°)
+    boardW      = BW * Math.abs(c);
+    boardFlipped = c < 0;
+  }
 
-  // ── Draw board first (behind player) ──
-  const boardCX = cx;
+  // --- 180: whole skater rotates around Y axis ---
+  // Body + head + board all crush horizontally together.
+  // facingSign: +1 = facing travel direction, -1 = facing backwards.
+  // Starts from persistent bodyScaleX (1 or -1 depending on fakie state).
+  let bodyW      = PW;
+  let headW      = HEAD_W;
+  let body180BW  = BW;    // board width during 180
+  let facingSign = p.bodyScaleX ?? 1;
+
+  if (p.trick === TRICK.T180) {
+    const c = Math.cos(ang);           // 1 → 0 → -1
+    bodyW     = Math.max(1, PW    * Math.abs(c));
+    headW     = Math.max(1, HEAD_W * Math.abs(c));
+    body180BW = Math.max(1, BW    * Math.abs(c));
+    // Flip facing once we cross 90° (cos goes negative)
+    facingSign = c >= 0 ? (p.bodyScaleX ?? 1) : -(p.bodyScaleX ?? 1);
+  }
+
+  // Pick the board width to use (180 overrides shove-it; kickflip keeps BW)
+  let finalBoardW = (p.trick === TRICK.T180)   ? body180BW
+                  : (p.trick === TRICK.SHOVEIT) ? boardW
+                  : BW;
+
+  // --- Ollie tilt amount (0-1) ---
+  const ollieT = p.olliePhase === 1 ? clamp(1 - p.ollieTimer / 0.06, 0, 1)
+               : p.olliePhase === 2 ? 0.35 * clamp(1 - (-p.vy / 500), 0, 1)
+               : 0;
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Draw board (behind player)
+  // ─────────────────────────────────────────────────────────────────────────
   const boardCY = footY + BOARD_OFFSET_Y;
 
-  ctx.save();
-  ctx.translate(boardCX, boardCY);
-  ctx.scale(wholeScaleX < 0.04 && wholeScaleX > -0.04 ? 0.04 * Math.sign(wholeScaleX || 1) : wholeScaleX, 1);
-
   if (!p.boardDetached) {
-    // Apply ollie angle
-    ctx.rotate((p.boardNoseAngle + p.boardTailAngle) / 2);
-
-    // Board-specific trick transforms (kickflip / shove-it) on top
-    if (p.trick === TRICK.KICKFLIP) {
-      const sy = Math.abs(Math.cos(p.trickAngle));
-      ctx.scale(1, sy < 0.05 ? 0.05 : sy);
-    } else if (p.trick === TRICK.SHOVEIT) {
-      const sx = Math.cos(p.trickAngle);
-      ctx.scale(sx < 0.05 && sx > -0.05 ? 0.05 : sx, 1);
-    }
-
-    const bw = BW, bh = BH, kick = 4, x0 = -bw/2, y0 = 0;
-    let boardCol = C.board;
-    if (p.trick === TRICK.KICKFLIP && Math.sin(p.trickAngle) < 0) boardCol = C.orange;
-    ctx.fillStyle = boardCol;
-    ctx.beginPath();
-    ctx.moveTo(x0, y0 - kick); ctx.lineTo(x0 + 6, y0);
-    ctx.lineTo(x0 + bw - 6, y0); ctx.lineTo(x0 + bw, y0 - kick);
-    ctx.lineTo(x0 + bw, y0 - bh); ctx.lineTo(x0, y0 - bh);
-    ctx.closePath(); ctx.fill();
-    // Wheels
-    ctx.fillStyle = C.wheel;
-    ctx.beginPath(); ctx.arc(x0 + 9, y0 + WHEEL_R * 0.5, WHEEL_R, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(x0 + bw - 9, y0 + WHEEL_R * 0.5, WHEEL_R, 0, Math.PI * 2); ctx.fill();
+    drawBoard(ctx, cx, boardCY, finalBoardW, boardH, boardUpsideDown, boardFlipped, ollieT);
+  } else {
+    // Board drifting away after bail
+    drawBoard(ctx, p.boardLostX + PW/2, p.boardLostY, BW, BH, false, false, 0);
   }
-  ctx.restore();
 
-  // ── Draw player body ──
-  ctx.save();
-  ctx.translate(cx, p.y + PH / 2);
-  ctx.scale(wholeScaleX < 0.04 && wholeScaleX > -0.04 ? 0.04 * Math.sign(wholeScaleX || 1) : wholeScaleX, 1);
+  // ─────────────────────────────────────────────────────────────────────────
+  // Draw body (cape)
+  // ─────────────────────────────────────────────────────────────────────────
+  const bx = cx - bodyW / 2;
+  const by = p.y;
 
-  // Cape / body (dark with purple tint)
-  ctx.fillStyle = '#2d1b4e';  // dark dracula cape
-  ctx.fillRect(-PW/2, -PH/2, PW, PH);
+  // Main cape
+  ctx.fillStyle = '#2d1b4e';
+  ctx.fillRect(bx, by, bodyW, PH);
 
-  // Cape lapels / collar (inner lighter strip)
-  ctx.fillStyle = '#44475a';
-  ctx.fillRect(-PW/2 + 5, -PH/2, PW - 10, PH * 0.6);
-
-  // Cape wings slightly wider at bottom
-  ctx.fillStyle = '#1a0d30';
-  ctx.fillRect(-PW/2 - 2, -PH/2 + 8, 4, PH - 10);   // left wing
-  ctx.fillRect(PW/2 - 2, -PH/2 + 8, 4, PH - 10);    // right wing
-
-  // Head — drawn above body
-  const headCY = -PH/2 - HEAD_H/2 - 1;
-  drawDraculaFace(ctx, facing, HEAD_W, HEAD_H);
-
-  ctx.restore();
-
-  // ── Detached board flies away ──
-  if (p.boardDetached) {
-    ctx.save();
-    ctx.translate(p.boardLostX + PW/2, p.boardLostY);
-    const bw = BW, bh = BH, kick = 4, x0 = -bw/2, y0 = 0;
-    ctx.fillStyle = C.board;
-    ctx.beginPath();
-    ctx.moveTo(x0, y0 - kick); ctx.lineTo(x0 + 6, y0);
-    ctx.lineTo(x0 + bw - 6, y0); ctx.lineTo(x0 + bw, y0 - kick);
-    ctx.lineTo(x0 + bw, y0 - bh); ctx.lineTo(x0, y0 - bh);
-    ctx.closePath(); ctx.fill();
-    ctx.restore();
+  // Inner collar / lapels
+  if (bodyW > 8) {
+    const lapW = Math.max(1, (bodyW - 10) * (bodyW / PW));
+    ctx.fillStyle = '#44475a';
+    ctx.fillRect(cx - lapW/2, by, lapW, PH * 0.6);
   }
+
+  // Cape wings (wider flaps at sides, scale with body width)
+  if (bodyW > 10) {
+    const wingW = Math.max(1, 4 * (bodyW / PW));
+    ctx.fillStyle = '#1a0d30';
+    ctx.fillRect(bx - wingW * 0.5,        by + 8, wingW, PH - 10);
+    ctx.fillRect(bx + bodyW - wingW * 0.5, by + 8, wingW, PH - 10);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Draw head (Dracula face, above body)
+  // ─────────────────────────────────────────────────────────────────────────
+  const headCY = by - HEAD_H / 2 - 1;
+  drawDraculaFace(ctx, cx, headCY, headW, facingSign);
 }
 
 // ── Render ─────────────────────────────────────────────────────────────────
