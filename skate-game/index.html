@@ -25,11 +25,11 @@
 <canvas id="c"></canvas>
 <script type="application/json" id="cfg">
 {
-  "W": 800, "H": 450,
+  "W": 480, "H": 700,
   "GRAVITY": 1400,
   "JUMP_VEL": -520,
   "MOVE_SPEED": 230,
-  "GROUND_Y": 360,
+  "GROUND_Y": 560,
   "SCORE_PER_LIFE": 500,
 
   "scale": 1.0,
@@ -80,7 +80,7 @@
   "parallax": {
     "speed1":        0.12,
     "speed2":        0.32,
-    "tileW":         800,
+    "tileW":         480,
     "far_minH":      80,
     "far_maxH":      200,
     "far_peaks":     10,
@@ -155,13 +155,10 @@ let touchScaleX = 1, touchScaleY = 1;
 function resizeCanvas() {
   const sw = window.innerWidth;
   const sh = window.innerHeight;
-  const scale = Math.min(sw / W, sh / H);
-  const dw = Math.round(W * scale);
-  const dh = Math.round(H * scale);
-  canvas.style.width  = dw + 'px';
-  canvas.style.height = dh + 'px';
-  touchScaleX = W / dw;
-  touchScaleY = H / dh;
+  canvas.style.width  = sw + 'px';
+  canvas.style.height = sh + 'px';
+  touchScaleX = W / sw;
+  touchScaleY = H / sh;
 }
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
@@ -403,10 +400,10 @@ function generateChunk(chunkX, difficulty) {
   // Weights at difficulty=0 → difficulty=1 (normalized automatically)
   //                  base   + scale * difficulty
   const WEIGHTS = [
-    { type: 'rail',  base: 0.35, scale:  0.20 },
+    { type: 'rail',  base: 0.25, scale:  0.20 },
     { type: 'pair',  base: 0.15, scale:  0.25 },
-    { type: 'pit',   base: 0.25, scale:  0.10 },
-    { type: 'enemy', base: 0.10, scale:  0.10 },
+    { type: 'pit',   base: 0.40, scale:  0.10 },
+    { type: 'enemy', base: 0.80, scale:  0.10 },
     { type: 'box',   base: 0.12, scale: -0.20 },
   ];
 
@@ -794,7 +791,7 @@ function updatePlayer(dt) {
       flashTimer=0.15; flashColor=C.flash;
       p.fakieAtJump=p.fakie; p.vy=CFG.enemy.killBoostVY;
       p.onGround=false; p.olliePhase=2; p.trickFailed=false;
-      camX=p.x-W*0.25; return;
+      camX=p.x-160; return;
     }
     if (consumeJust('Space')) {
       p.grinding=false; p.grindRail=null; p.hadGrind=true;
@@ -803,7 +800,7 @@ function updatePlayer(dt) {
     if (p.x>rail.x+rail.w) {
       p.grinding=false; p.grindRail=null; p.hadGrind=true; rail.cleared=true;
     }
-    camX=p.x-W*0.25; return;
+    camX=p.x-160; return;
   }
 
   // Grind / bonk approach
@@ -948,7 +945,7 @@ function updatePlayer(dt) {
   p.grindBoardAngle=lerp(p.grindBoardAngle,0,dt*10);
   p.grindPlayerShift=lerp(p.grindPlayerShift,0,dt*10);
 
-  camX=p.x-W*0.25;
+  camX=p.x-160;
 }
 
 // ── Draw helpers ──────────────────────────────────────────────────────────
