@@ -220,9 +220,10 @@ canvas.addEventListener('touchend', e => {
     const diagonal       = !pureVertical && !pureHorizontal;
 
     if (dy < 0) {
-      // Any upward swipe → kickflip if airborne, ollie if on ground
+      // Upward swipe → kickflip (pure up) or tre-flip (up-right diagonal) if airborne
       if (player && !player.onGround && player.trick === TRICK.NONE) {
-        fireKey('KeyK');
+        if (diagonal && dx > 0) fireKey('KeyI'); // up-right = tre-flip
+        else                    fireKey('KeyK'); // up = kickflip
       } else {
         fireKey('Space');
       }
@@ -281,7 +282,7 @@ const BOARD_OFFSET_Y = SZ.boardOffsetY  * S;
 const WHEEL_R        = SZ.wheelR        * S;
 const GRIND_BOARD_TILT   = 0.45;
 const GRIND_PLAYER_SHIFT = SZ.grindShift * S;
-const TRICK = { NONE: 0, KICKFLIP: 1, SHOVEIT: 2, T180: 3 };
+const TRICK = { NONE: 0, KICKFLIP: 1, SHOVEIT: 2, T180: 3, TREFLIP: 4 };
 
 // Helper: scaled HUD font string
 const hf  = (key) => `${Math.round(HUD[key] * S)}px monospace`;
@@ -292,6 +293,7 @@ const TRICK_NAMES = {
     1: { name: 'KICKFLIP',  pts: 120 },
     2: { name: 'SHOVE-IT',  pts: 80  },
     3: { name: '180',       pts: 100, fakieName: 'HALF CAB' },
+    4: { name: 'TRE FLIP',  pts: 350 },
   },
   combos: {
     '3,3': { name: '360',                pts: 250, fakieName: 'FULL CAB'               },
@@ -590,6 +592,7 @@ const TRICK_AIR_BOOST = {
   [TRICK.KICKFLIP]: -200,
   [TRICK.SHOVEIT]:  -260,
   [TRICK.T180]:     -220,
+  [TRICK.TREFLIP]:  -300,
 };
 const TRICK_BOOST_DECAY = 0.75;  // each successive trick gives this fraction of previous
 
@@ -602,9 +605,10 @@ function startTrick(p, type) {
   }
   if (p.trick!==TRICK.NONE) return;
   p.trick=type; p.trickAngle=0; p.trickDone=false; p.trickLandWindow=false;
-  if (type===TRICK.KICKFLIP) { p.trickTarget=Math.PI*2; p.trickSpeed=Math.PI*9.5; p.trickAxis='x'; }
-  else if (type===TRICK.SHOVEIT) { p.trickTarget=Math.PI; p.trickSpeed=Math.PI*3.5; p.trickAxis='y'; }
-  else if (type===TRICK.T180) { p.trickTarget=Math.PI; p.trickSpeed=Math.PI*7.2; p.trickAxis='y180'; }
+  if (type===TRICK.KICKFLIP) { p.trickTarget=Math.PI*2; p.trickSpeed=Math.PI*9.5;  p.trickAxis='x'; }
+  else if (type===TRICK.SHOVEIT)  { p.trickTarget=Math.PI;   p.trickSpeed=Math.PI*3.5;  p.trickAxis='y'; }
+  else if (type===TRICK.T180)     { p.trickTarget=Math.PI;   p.trickSpeed=Math.PI*7.2;  p.trickAxis='y180'; }
+  else if (type===TRICK.TREFLIP)  { p.trickTarget=Math.PI*2; p.trickSpeed=Math.PI*4.5;  p.trickAxis='treflip'; }
   if (p.fakie) p.trickSpeed *= CFG.fakie.trickSpeedMult;
 
   // Air boost: extend the jump, diminishing with each trick in the combo
@@ -909,6 +913,7 @@ function updatePlayer(dt) {
     if (consumeJust('KeyK')) startTrick(p,TRICK.KICKFLIP);
     if (consumeJust('KeyL')) startTrick(p,TRICK.SHOVEIT);
     if (consumeJust('KeyJ')) startTrick(p,TRICK.T180);
+    if (consumeJust('KeyI')) startTrick(p,TRICK.TREFLIP);
     if (consumeJust('KeyA')) p.grindIntent='5-0';
     if (consumeJust('KeyD')) p.grindIntent='NOSE GRIND';
   }
@@ -1097,9 +1102,15 @@ function drawPlayer(p, pa=1) {
   }
 
   let boardW = BW, boardFlipped = false;
-  if (p.trick === TRICK.SHOVEIT) {
+  if (p.trick === TRICK.SHOVEIT || p.trick === TRICK.TREFLIP) {
     const c = Math.cos(ang);
     boardW = BW * Math.abs(c); boardFlipped = c < 0;
+  }
+  if (p.trick === TRICK.TREFLIP) {
+    // X axis (kickflip): board height swells as it flips over
+    const sinA = Math.abs(Math.sin(ang));
+    boardH = BH + (WHEEL_R * 2 + BH * 2) * sinA;
+    boardUpsideDown = Math.cos(ang) < 0;
   }
 
   // For 180, crush body + head + board width together
@@ -1115,19 +1126,21 @@ function drawPlayer(p, pa=1) {
     facingSign = c >= 0 ? (p.bodyScaleX ?? 1) : -(p.bodyScaleX ?? 1);
   }
 
-  const finalBW = p.trick === TRICK.T180   ? body180BW
-                : p.trick === TRICK.SHOVEIT ? boardW
+  const finalBW = p.trick === TRICK.T180                                  ? body180BW
+                : p.trick === TRICK.SHOVEIT || p.trick === TRICK.TREFLIP  ? boardW
                 : BW;
   const boardCY = footY + BOARD_OFFSET_Y;
 
   // ── Board ────────────────────────────────────────────────────────────────
   if (!p.boardDetached) {
-    const ks = p.trick === TRICK.KICKFLIP ? Math.sin(ang) : 0;
+    const ks = (p.trick === TRICK.KICKFLIP || p.trick === TRICK.TREFLIP) ? Math.sin(ang) : 0;
     const toff = finalBW / 2 - finalBW * 0.2;
     const pivX = p.grindType === 'NOSE GRIND' ? cx + toff
                : p.grindType === '5-0'        ? cx - toff : cx;
+    // To emulate real tre flip z-axis tilt
+    const zTilt = p.trick === TRICK.TREFLIP ? Math.sin(ang / 2) * Math.PI * -0.2 : p.grindBoardAngle;
     ctx.save();
-    ctx.translate(pivX, boardCY); ctx.rotate(p.grindBoardAngle); ctx.translate(-pivX, -boardCY);
+    ctx.translate(cx, boardCY); ctx.rotate(zTilt); ctx.translate(-cx, -boardCY);
     drawBoard(cx, boardCY, finalBW, boardH, boardUpsideDown, boardFlipped,
               p.boardNoseAngle, p.boardTailAngle, ks, pa);
     ctx.restore();
@@ -1583,7 +1596,7 @@ function drawTouchOverlay() {
   else if (p.trickDone&&p.trickLandWindow) { hint='tap to land!'; hintColor=C.green; }
   else if (p.trick!==TRICK.NONE) { hint='tap = bail'; hintColor=C.orange; }
   else if (nearRail) { hint='↙ 5-0  ↓ 50-50  ↘ nose grind'; hintColor=C.cyan; }
-  else { hint='← shove  ↑ kickflip  → 180  ↓ grind'; }
+  else { hint='← shove  ↑ kick  ↗ tre  → 180  ↓ grind'; }
 
   ctx.fillStyle=hintColor;
   ctx.fillText(hint, W/2, H-Math.round(barH*0.25));
@@ -1616,7 +1629,7 @@ function drawHUD() {
       ctx.fillText('⬇ SWIPE DOWN TO LAND!', W/2, Math.round(HUD.landHintFont*S)+4);
     } else if (player.trick===TRICK.NONE&&!findApproachRail(player)) {
       ctx.fillStyle=C.comment; ctx.font=hf('airHintFont'); ctx.textAlign='center';
-      ctx.fillText('← shove  ↑ kickflip  → 180', W/2, Math.round(HUD.airHintFont*S)+4);
+      ctx.fillText('← shove  ↑ kick  ↗ tre  → 180', W/2, Math.round(HUD.airHintFont*S)+4);
     }
   }
 }
@@ -1640,6 +1653,7 @@ function drawTitle() {
   const rows=[
     ['↑  Swipe Up (ground)', 'Ollie'],
     ['↑  Swipe Up (air)',    'Kickflip'],
+    ['↗  Swipe Up-Right',   'Tre Flip'],
     ['←  Swipe Left',       'Shove-it'],
     ['→  Swipe Right',      '180'],
     ['↓  Swipe Down',       'Land / 50-50 grind / Bail'],
