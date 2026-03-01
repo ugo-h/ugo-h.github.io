@@ -28,7 +28,7 @@
   "W": 480, "H": 700,
   "GRAVITY": 1400,
   "JUMP_VEL": -520,
-  "MOVE_SPEED": 230,
+  "MOVE_SPEED": 280,
   "GROUND_Y": 560,
   "SCORE_PER_LIFE": 500,
 
@@ -53,13 +53,13 @@
     "railY":         28,
     "particleMinSize": 1,
     "particleMaxSize": 3,
-    "pitMinW":        120,
-    "pitMaxW":        280,
+    "pitMinW":        160,
+    "pitMaxW":        320,
     "pitDepth":       200,
     "pitRespawnOffset": 150,
-    "pitRampThreshold": 160,
+    "pitRampThreshold": 230,
     "rampH":            55,
-    "rampEdgeGuard":    60,
+    "rampEdgeGuard":    80,
     "rampJumpBoost":   0.45
   },
 
@@ -79,7 +79,7 @@
 
   "parallax": {
     "speed1":        0.12,
-    "speed2":        0.32,
+    "speed2":        0.62,
     "tileW":         480,
     "far_minH":      80,
     "far_maxH":      200,
@@ -400,10 +400,10 @@ function generateChunk(chunkX, difficulty) {
   // Weights at difficulty=0 → difficulty=1 (normalized automatically)
   //                  base   + scale * difficulty
   const WEIGHTS = [
-    { type: 'rail',  base: 0.25, scale:  0.20 },
+    { type: 'rail',  base: 0.30, scale:  0.20 },
     { type: 'pair',  base: 0.15, scale:  0.25 },
-    { type: 'pit',   base: 0.40, scale:  0.10 },
-    { type: 'enemy', base: 0.80, scale:  0.10 },
+    { type: 'pit',   base: 0.25, scale:  0.10 },
+    { type: 'enemy', base: 0.10, scale:  0.10 },
     { type: 'box',   base: 0.12, scale: -0.20 },
   ];
 
@@ -1296,7 +1296,7 @@ function paintStrip(b, cfg, worldX0, worldX1) {
     const r1 = seededRand(i * 5381 + 78);
     const r2 = seededRand(i * 5381 + 79);
     const cx     = i * castleSpacing + r0 * castleSpacing * 0.5 - b.bufOriginWorld;
-    const towerW = (18 + r1 * 14) * castleScale;
+    const towerW = (18 + r1 * 38) * castleScale;
     const towerH = (60 + r2 * 50) * castleScale;
     const towerY = castleBaseY - towerH;
     bc.fillStyle = castleColor;
