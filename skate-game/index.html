@@ -172,21 +172,60 @@ const SPRITE_SRC_H  = 16;
 const SPRITE_STRIDE = 24; // 16px frame + 8px gap between frames
 
 // ── Sound ──────────────────────────────────────────────────────────────────
-function loadSound(src) { const a = new Audio(src); a.load(); return a; }
-function playSound(a) { a.currentTime = 0; a.play().catch(() => {}); }
-const sndPop   = loadSound('sound/SB_POP_SOUND.wav');
-
-const sndLand  = loadSound('sound/SB_LAND_SOUND.wav');
-const sndGrind = loadSound('sound/GRIND_SOUND.wav'); sndGrind.loop = true; sndGrind.volume = 0.25;
-const sndGetOffRail = loadSound('sound/GET_OFF_RAIL.wav'); sndGetOffRail.volume = 0.125;
-const sndRide = loadSound('sound/RIDING_SOUND.wav'); sndRide.volume = 0.25;
-const sndTurn = loadSound('sound/SB_TURN_SOUND.wav'); sndTurn.volume = 0.125;
-const sndTrick = loadSound('sound/KICKFLIP_SOUND.wav'); sndTrick.volume = 0.125;
-const sndSpecial = loadSound('sound/THPS_SPECIAL.oga'); sndSpecial.volume = 0.125;
-const sndPunch = loadSound('sound/PUNCH_SOUND.wav'); sndPunch.volume = 1;
-const sndHitRail = loadSound('sound/GET_OFF_RAIL.wav'); sndHitRail.volume = 0.5;
-// const sndCatch = loadSound('sound/SB_CATCH_SOUND.wav'); sndCatch.volume = 0.05;
- const sndSlam = loadSound('sound/IMPACT_SOUND.wav');
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+const audioBufs = {};
+(async () => {
+  const files = {
+    pop:        'sound/SB_POP_SOUND.wav',
+    land:       'sound/SB_LAND_SOUND.wav',
+    grind:      'sound/GRIND_SOUND.wav',
+    getOffRail: 'sound/GET_OFF_RAIL.wav',
+    ride:       'sound/RIDING_SOUND.wav',
+    turn:       'sound/SB_TURN_SOUND.wav',
+    trick:      'sound/KICKFLIP_SOUND.wav',
+    special:    'sound/THPS_SPECIAL.oga',
+    punch:      'sound/PUNCH_SOUND.wav',
+    slam:       'sound/IMPACT_SOUND.wav',
+  };
+  await Promise.all(Object.entries(files).map(async ([key, src]) => {
+    try {
+      const res = await fetch(src);
+      audioBufs[key] = await audioCtx.decodeAudioData(await res.arrayBuffer());
+    } catch(e) { console.warn('Audio load failed:', src); }
+  }));
+})();
+function playBuf(key, vol = 1) {
+  const buf = audioBufs[key];
+  if (!buf) return;
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  const g = audioCtx.createGain();
+  g.gain.value = vol;
+  src.connect(g);
+  g.connect(audioCtx.destination);
+  src.start();
+}
+const grindLoop = { src: null };
+const rideLoop  = { src: null };
+function startLoop(loop, key, vol) {
+  if (loop.src) return;
+  const buf = audioBufs[key];
+  if (!buf) return;
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.loop = true;
+  const g = audioCtx.createGain();
+  g.gain.value = vol;
+  src.connect(g);
+  g.connect(audioCtx.destination);
+  src.start();
+  loop.src = src;
+}
+function stopLoop(loop) {
+  if (!loop.src) return;
+  try { loop.src.stop(); } catch(e) {}
+  loop.src = null;
+}
 
 let touchScaleX = 1, touchScaleY = 1;
 function resizeCanvas() {
@@ -203,6 +242,7 @@ resizeCanvas();
 // ── Keyboard (still works on desktop) ────────────────────────────────────
 const keys = {}, justPressed = {};
 window.addEventListener('keydown', e => {
+  audioCtx.resume();
   if (!keys[e.code]) justPressed[e.code] = true;
   keys[e.code] = true;
   if (['Space','KeyK','KeyL','KeyJ','KeyS','KeyA','KeyD'].includes(e.code)) e.preventDefault();
@@ -230,6 +270,7 @@ function canvasPt(clientX, clientY) {
 }
 
 canvas.addEventListener('touchstart', e => {
+  audioCtx.resume();
   e.preventDefault();
   const pt = canvasPt(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
 
@@ -688,9 +729,9 @@ function startTrick(p, type) {
   }
   if (p.trick!==TRICK.NONE) return;
   p.trick=type; p.trickAngle=0; p.trickDone=false; p.trickLandWindow=false;
-  if (type===TRICK.KICKFLIP) { p.trickTarget=Math.PI*2; p.trickSpeed=Math.PI*9.5; p.trickAxis='x'; playSound(sndTrick); }
-  else if (type===TRICK.SHOVEIT) { p.trickTarget=Math.PI; p.trickSpeed=Math.PI*3.5; p.trickAxis='y'; playSound(sndTurn); }
-  else if (type===TRICK.T180) { p.trickTarget=Math.PI; p.trickSpeed=Math.PI*7.2; p.trickAxis='y180'; playSound(sndTurn); }
+  if (type===TRICK.KICKFLIP) { p.trickTarget=Math.PI*2; p.trickSpeed=Math.PI*9.5; p.trickAxis='x'; playBuf('trick', 0.125); }
+  else if (type===TRICK.SHOVEIT) { p.trickTarget=Math.PI; p.trickSpeed=Math.PI*3.5; p.trickAxis='y'; playBuf('turn', 0.125); }
+  else if (type===TRICK.T180) { p.trickTarget=Math.PI; p.trickSpeed=Math.PI*7.2; p.trickAxis='y180'; playBuf('turn', 0.125); }
   if (p.fakie) p.trickSpeed *= CFG.fakie.trickSpeedMult;
 
   // Air boost: extend the jump, diminishing with each trick in the combo
@@ -763,7 +804,7 @@ function doBonk(p, enemy) {
   p.preGrindBatch = [...p.trickBatch]; p.trickBatch = [];
   p.grindTime = 0; p.hadGrind = false; p.vy = 0; p.onGround = false; p.olliePhase = 0;
 
-  playSound(sndPunch);
+  playBuf('punch');
 }
 function processTrickBatch(p) {
   const batch=p.trickBatch; if (!batch.length) return;
@@ -802,7 +843,7 @@ function updateOllie(p, dt) {
         p.vy = CFG.JUMP_VEL * jumpMult;
       }
       p.onGround=false; p.olliePhase=2;
-      playSound(sndPop);
+      playBuf('pop');
       p.boardNoseAngle=p.fakie?-4.3:4.3; p.boardTailAngle=p.fakie?-4.1:4.1;
     }
   } else if (p.olliePhase===2) {
@@ -821,7 +862,7 @@ function showMsg(msg, color) { screenMsg=msg; screenMsgTimer=1.8; screenMsgColor
 function showSubMsg(msg, color) { screenMsg2=msg; screenMsgTimer2=1.8; screenMsgColor2=color||C.green; }
 function loseLife(reason) {
   if (player.dying) return;
-  if (gameState !== 'tutorial') playSound(sndSlam);
+  if (gameState !== 'tutorial') playBuf('slam');
   if (gameState !== 'tutorial') lives=Math.max(0,lives-1);
   player.dying=true; player.alive=false; player.deathTimer=player.deathDuration; player.vx=0;
   if (gameState !== 'tutorial') { spawnDeathEffect(player); flashTimer=0.4; flashColor=C.flash; }
@@ -878,19 +919,19 @@ function updatePlayer(dt) {
   if (lineMeeter > getScoreToNextLife()) {
     lives+=1;
     lineMeeter = 0;
-    playSound(sndSpecial);
+    playBuf('special', 0.125);
     showSubMsg('+'+1+' LIFE!',C.green); flashTimer=0.2; flashColor='rgba(80,250,123,0.3)';
   }
 
   if (p.onGround) {
-    if (sndRide.paused) sndRide.play().catch(()=>{});
+    startLoop(rideLoop, 'ride', 0.25);
   } else {
-    sndRide.pause()
+    stopLoop(rideLoop);
   }
 
   // Grinding
   if (p.grinding) {
-    if (sndGrind.paused) sndGrind.play().catch(()=>{});
+    startLoop(grindLoop, 'grind', 0.25);
     const rail=p.grindRail;
     p.x+=p.vx*dt; p.y=lerp(p.y,rail.y-PH-16,Math.min(1,dt*18));
     p.vy=0; p.grindTime+=dt;
@@ -901,7 +942,7 @@ function updatePlayer(dt) {
     spawnGrindSparks(p);
     // Enemy bonk: auto-jump off after bonkDuration
     if (rail.type==='enemy' && p.grindTime>=CFG.enemy.bonkDuration) {
-      p.grinding=false; p.grindRail=null; sndGrind.pause(); sndGrind.currentTime=0;
+      p.grinding=false; p.grindRail=null; stopLoop(grindLoop);
       rail.alive=false; rail.dying=false; rail.cleared=true;
       const pre=resolveBatch(p.preGrindBatch,p.fakieAtJump); p.preGrindBatch=[];
       const total=Math.round((CFG.enemy.bonkScore+Math.round(pre.pts*1.5))*CFG.enemy.scoreKillMult);
@@ -919,12 +960,12 @@ function updatePlayer(dt) {
     if (consumeJust('Space')) {
       p.grinding=false; p.grindRail=null; p.hadGrind=true;
       p.fakieAtJump=p.fakie; p.vy=CFG.JUMP_VEL*0.75*(p.fakie?CFG.fakie.jumpMult:1); p.onGround=false; p.olliePhase=2;
-      playSound(sndGetOffRail);
+      playBuf('getOffRail', 0.125);
     }
     if (p.x>rail.x+rail.w) {
       p.grinding=false; p.grindRail=null; p.hadGrind=true; rail.cleared=true;
     }
-    if (!p.grinding) { sndGrind.pause(); sndGrind.currentTime=0; }
+    if (!p.grinding) { stopLoop(grindLoop); }
     p.animTimer+=dt; if(p.animTimer>=1/6){p.animTimer-=1/6;p.animFrame=(p.animFrame+1)%SPRITE_FRAMES;}
     camX=p.x-160; return;
   }
@@ -940,7 +981,7 @@ function updatePlayer(dt) {
         p.preGrindBatch=[...p.trickBatch]; p.trickBatch=[];
         p.grindTime=0; p.hadGrind=false; p.vy=0; p.onGround=false; p.olliePhase=0;
 
-        playSound(sndHitRail);
+        playBuf('getOffRail', 0.5);
       }
     }
   }
@@ -978,7 +1019,7 @@ function updatePlayer(dt) {
     if (p.y >= surfaceY - 4) {
       p.y = surfaceY;
       p.vy = Math.min(p.vy, 0);
-      if (!p.onGround) { processTrickBatch(p); p.trickFailed = false; playSound(sndLand); }
+      if (!p.onGround) { processTrickBatch(p); p.trickFailed = false; playBuf('land'); }
       p.onGround = true;
     }
     p.rampAngle = lerp(p.rampAngle, rampBelow.angle, 0.25);
@@ -1021,7 +1062,7 @@ function updatePlayer(dt) {
       else if (p.hadGrind) processGrindLanding(p);
       else processTrickBatch(p);
       p.onGround=true; p.olliePhase=3; p.ollieTimer=0.1; p.trickFailed=false; p.squishTimer=CFG.squish.landDuration;
-      if (!p.dying) playSound(sndLand);
+      if (!p.dying) playBuf('land');
     }
     p.vy=0;
   } else if (pitBelow && p.onGround) {
