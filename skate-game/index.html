@@ -28,6 +28,8 @@
   "W": 480, "H": 700,
   "GRAVITY": 1400,
   "JUMP_VEL": -520,
+  "jumpBufferTime": 0.15,
+  "coyoteTime": 0.15,
   "MOVE_SPEED": 280,
   "GROUND_Y": 560,
   "SCORE_PER_LIFE": 500,
@@ -242,7 +244,7 @@ resizeCanvas();
 // ── Keyboard (still works on desktop) ────────────────────────────────────
 const keys = {}, justPressed = {};
 window.addEventListener('keydown', e => {
-  audioCtx.resume();
+  if (!paused) audioCtx.resume();
   if (!keys[e.code]) justPressed[e.code] = true;
   keys[e.code] = true;
   if (['Space','KeyK','KeyL','KeyJ','KeyS','KeyA','KeyD'].includes(e.code)) e.preventDefault();
@@ -262,6 +264,7 @@ function clearJust() { for (const k in justPressed) justPressed[k] = false; }
 //
 // Grind type: 3 tap buttons rendered at bottom when near a rail
 const SWIPE_MIN = 15; // canvas px
+const PAUSE_BTN = { w: 44, h: 36 }; // top-right corner hit area
 
 let touchStart = null;
 
@@ -270,7 +273,7 @@ function canvasPt(clientX, clientY) {
 }
 
 canvas.addEventListener('touchstart', e => {
-  audioCtx.resume();
+  if (!paused) audioCtx.resume();
   e.preventDefault();
   const pt = canvasPt(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
 
@@ -285,6 +288,15 @@ canvas.addEventListener('touchend', e => {
   const dy = pt.y - touchStart.y;
   const dist = Math.sqrt(dx*dx + dy*dy);
   const elapsed = Date.now() - touchStart.t;
+
+  // Pause button tap (top-right corner)
+  if ((gameState === 'playing' || gameState === 'tutorial') &&
+      dist < SWIPE_MIN && elapsed < 300 &&
+      touchStart.x >= W - PAUSE_BTN.w && touchStart.y <= PAUSE_BTN.h) {
+    togglePause();
+    touchStart = null; return;
+  }
+  if (paused) { touchStart = null; return; }
 
   if (dist < SWIPE_MIN && elapsed < 300) {
     // Tap → ollie / off rail
@@ -401,6 +413,8 @@ function makePlayer() {
     trickBatch: [], fakieAtJump: false,
     bodyScaleX: 1, fakie: false,
     boardNoseAngle: 0, boardTailAngle: 0,
+    jumpBuffer: 0,
+    coyoteTimer: 0,
     alive: true, dying: false, deathTimer: 0, deathDuration: 0.7,
     flashTimer: 0,
     boardLostX: 0, boardLostY: 0, boardDistance: 0, popOffsetX: 0,
@@ -418,6 +432,23 @@ function makePlayer() {
 // ── World state ────────────────────────────────────────────────────────────
 let camX = 0, score = 0, lives = 3, livesFromScore = 0;
 let gameState = 'title';
+let paused = false, pauseTip = 0;
+function togglePause() {
+  paused = !paused;
+  if (paused) {
+    pauseTip = Math.floor(Math.random() * PAUSE_TIPS.length);
+    audioCtx.suspend();
+  } else {
+    audioCtx.resume();
+  }
+}
+const PAUSE_TIPS = [
+  'Chain tricks in the air for huge combo multipliers — land cleanly to cash out!',
+  'Grinding rails resets your trick combo and stacks extra points on top.',
+  'Nosebonk vampires mid-air to earn a score multiplier and a big upward boost.',
+  'Going fakie (riding backwards) makes tricks faster and scores style points.',
+  'Rack up LINE score by chaining jumps — fill the bar to earn an extra life!',
+];
 let flashTimer = 0, flashColor = C.flash;
 let lineMeeter = 0;
 let lineMeeterPersist = 0;
@@ -597,13 +628,6 @@ function initTutorial() {
   flashTimer = 0; particles = []; deathPieces = [];
   screenMsg = ''; screenMsgTimer = 0;
   screenMsg2 = ''; screenMsgTimer2 = 0;
-
-  // Tutorial rail: safe, fixed position, marked isTutorial so it never auto-clears
-  obstacles.push({
-    x: 1050, y: GROUND_Y - SZ.railY * S,
-    w: 280, h: SZ.railH * S,
-    type: 'rail', cleared: false, hit: false, isTutorial: true,
-  });
 
   tutStep = 0;
   tutComplete = false;
@@ -986,6 +1010,7 @@ function updatePlayer(dt) {
     }
   }
 
+  const wasOnGround = p.onGround;
   p.x+=p.vx*dt;
   if (!p.onGround) p.vy+=CFG.GRAVITY*dt;
   p.y+=p.vy*dt;
@@ -1021,6 +1046,7 @@ function updatePlayer(dt) {
       p.vy = Math.min(p.vy, 0);
       if (!p.onGround) { processTrickBatch(p); p.trickFailed = false; playBuf('land'); }
       p.onGround = true;
+      if (p.jumpBuffer > 0 && !p.dying) { p.jumpBuffer=0; p.olliePhase=0; startOllie(p); }
     }
     p.rampAngle = lerp(p.rampAngle, rampBelow.angle, 0.25);
     p.activeRamp = rampBelow;
@@ -1036,6 +1062,7 @@ function updatePlayer(dt) {
       p.vy = -launchSpeed * Math.sin(prevRamp.angle) * 1.8;
       p.onGround = false;
       p.olliePhase = 2;
+      p.coyoteTimer = CFG.coyoteTime;
       prevRamp.cleared = true;
     }
     p.activeRamp = null;
@@ -1063,6 +1090,7 @@ function updatePlayer(dt) {
       else processTrickBatch(p);
       p.onGround=true; p.olliePhase=3; p.ollieTimer=0.1; p.trickFailed=false; p.squishTimer=CFG.squish.landDuration;
       if (!p.dying) playBuf('land');
+      if (p.jumpBuffer > 0 && !p.dying) { p.jumpBuffer=0; p.olliePhase=0; startOllie(p); }
     }
     p.vy=0;
   } else if (pitBelow && p.onGround) {
@@ -1070,10 +1098,25 @@ function updatePlayer(dt) {
     p.vy = 40;
   }
 
+  // Coyote time: left the ground naturally (not via a jump)
+  if (wasOnGround && !p.onGround && p.olliePhase !== 2) {
+    p.coyoteTimer = CFG.coyoteTime;
+  } else if (p.onGround) {
+    p.coyoteTimer = 0;
+  } else if (p.coyoteTimer > 0) {
+    p.coyoteTimer = Math.max(0, p.coyoteTimer - dt);
+  }
+
   if (consumeJust('Space')) {
     if (p.onGround) startOllie(p);
+    else if (p.coyoteTimer > 0 && p.trick === TRICK.NONE) {
+      p.coyoteTimer = 0;
+      p.olliePhase=1; p.ollieTimer=0.06; p.boardNoseAngle=0;
+      p.trickBatch=[]; p.fakieAtJump=p.fakie; p.grindIntent='50-50';
+    }
     else if (p.trick!==TRICK.NONE&&p.trickDone&&p.trickLandWindow) tryLandTrick(p);
     else if (p.trick!==TRICK.NONE&&!p.trickDone) failTrick(p);
+    else p.jumpBuffer = CFG.jumpBufferTime; // buffered jump: fires on next landing
   }
   if (!p.onGround) {
     if (consumeJust('KeyK')) startTrick(p,TRICK.KICKFLIP);
@@ -1083,6 +1126,7 @@ function updatePlayer(dt) {
     if (consumeJust('KeyD')) p.grindIntent='NOSE GRIND';
   }
 
+  if (p.jumpBuffer > 0) p.jumpBuffer = Math.max(0, p.jumpBuffer - dt);
   updateOllie(p,dt); updateTrick(p,dt);
 
   if (p.invincibleTimer>0) p.invincibleTimer-=dt;
@@ -1797,6 +1841,8 @@ function render() {
     ctx.fillRect(0, 0, W, H);
     ctx.globalAlpha = 1;
   }
+
+  if (paused) drawPauseOverlay();
 }
 
 function drawTouchOverlay() {
@@ -1824,6 +1870,16 @@ function drawTouchOverlay() {
   ctx.fillText(hint, W/2, H-Math.round(barH*0.25));
 }
 
+function drawPauseBtn() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  roundRect(W - PAUSE_BTN.w, 0, PAUSE_BTN.w, PAUSE_BTN.h, 6); ctx.fill();
+  ctx.fillStyle = paused ? C.green : C.comment;
+  ctx.font = `bold ${Math.round(18*S)}px monospace`;
+  ctx.textAlign = 'center';
+  ctx.fillText(paused ? '▶' : '⏸', W - PAUSE_BTN.w / 2, 24);
+  ctx.restore();
+}
 function drawHUD() {
   if (gameState !== 'tutorial') {
     ctx.font=hfb('scoreFont'); ctx.fillStyle=C.text; ctx.textAlign='left';
@@ -1862,6 +1918,48 @@ function drawHUD() {
 //    ctx.fillText('← shove  ↑ kickflip  → 180', W/2, H/2 - 80);
 //  }
 //}
+  drawPauseBtn();
+}
+
+function drawPauseOverlay() {
+  // Dim background
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.fillRect(0, 0, W, H);
+
+  // Card
+  const cw = Math.min(W - 48, 400), ch = 220;
+  const cx = (W - cw) / 2, cy = (H - ch) / 2;
+  ctx.fillStyle = '#282a36';
+  roundRect(cx, cy, cw, ch, 16); ctx.fill();
+  ctx.strokeStyle = C.cyan; ctx.lineWidth = 2;
+  roundRect(cx, cy, cw, ch, 16); ctx.stroke();
+  ctx.lineWidth = 1;
+
+  // Title
+  ctx.textAlign = 'center';
+  ctx.fillStyle = C.green; ctx.font = `bold ${Math.round(32*S)}px monospace`;
+  ctx.fillText('PAUSED', W / 2, cy + 48);
+
+  // Tip label
+  ctx.fillStyle = C.cyan; ctx.font = `bold ${Math.round(12*S)}px monospace`;
+  ctx.fillText('TIP', W / 2, cy + 80);
+
+  // Tip text — word-wrap into two lines
+  const tip = PAUSE_TIPS[pauseTip];
+  ctx.fillStyle = C.text; ctx.font = `${Math.round(13*S)}px monospace`;
+  const words = tip.split(' '), maxW = cw - 40;
+  let line = '', lines = [];
+  for (const w of words) {
+    const test = line ? line + ' ' + w : w;
+    if (ctx.measureText(test).width > maxW && line) { lines.push(line); line = w; }
+    else line = test;
+  }
+  if (line) lines.push(line);
+  lines.forEach((l, i) => ctx.fillText(l, W / 2, cy + 108 + i * 22));
+
+  // Hint
+  ctx.fillStyle = C.comment; ctx.font = `${Math.round(11*S)}px monospace`;
+  ctx.fillText('Press P or Escape to resume', W / 2, cy + ch - 16);
 }
 
 function drawTitle() {
@@ -2019,6 +2117,14 @@ function tutTeleport() {
   if (isAdvance) {
     tutStep = tutNextStep;
     if (tutNextStep === 2) {
+      // Spawn the tutorial rail now (first time entering grind stage)
+      if (!obstacles.find(o => o.isTutorial)) {
+        obstacles.push({
+          x: 1050, y: GROUND_Y - SZ.railY * S,
+          w: 280, h: SZ.railH * S,
+          type: 'rail', cleared: false, hit: false, isTutorial: true,
+        });
+      }
       const tutRail = obstacles.find(o => o.isTutorial);
       np.x = tutRail ? tutRail.x - CFG.tutorial.railApproachDist : TUT_STAGE_X[2];
     } else {
@@ -2153,8 +2259,14 @@ function update(dt) {
 let lastTime=0;
 function loop(ts) {
   const dt=Math.min((ts-lastTime)/1000,0.05);
-  lastTime=ts; update(dt); render(); clearJust();
-requestAnimationFrame(loop);
+  lastTime=ts;
+  if ((gameState==='playing'||gameState==='tutorial') &&
+      (consumeJust('Escape')||consumeJust('KeyP'))) {
+    togglePause();
+  }
+  if (!paused) update(dt);
+  render(); clearJust();
+  requestAnimationFrame(loop);
 }
 initParallaxBuffers();
 requestAnimationFrame(loop);
