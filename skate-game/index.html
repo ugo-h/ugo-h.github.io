@@ -118,7 +118,14 @@
     "bonkScore":     100,
     "killBoostVY":   -420,
     "deathDuration": 0.5,
-    "bonkDuration":  0.07
+    "bonkDuration":  0.07,
+    "skeleton": {
+      "frames":  13,
+      "frameW":  22,
+      "frameH":  33,
+      "fps":     12,
+      "scale":   1.6
+    }
   },
 
   "colors": {
@@ -139,7 +146,8 @@
     "cyan":      "#8be9fd",
     "green":     "#50fa7b",
     "orange":    "#ffb86c",
-    "flash":     "rgba(255,85,85,0.45)"
+    "flash":     "rgba(255,85,85,0.45)",
+    "bone":      "#f7ecd5"
   },
 
   "tutorial": {
@@ -168,6 +176,12 @@ const vampireGlideImg = new Image();
 const vampireBackImg = new Image();
 vampireGlideImg.src = 'VampireFront.png';
 vampireBackImg.src = 'VampireBackAlt.png';
+const skeletonWalkImg = new Image();
+skeletonWalkImg.src = 'Skeleton_walk.png';
+const SKEL_FRAMES   = CFG.enemy.skeleton.frames;
+const SKEL_FRAME_W  = CFG.enemy.skeleton.frameW;
+const SKEL_FRAME_H  = CFG.enemy.skeleton.frameH;
+const SKEL_FPS      = CFG.enemy.skeleton.fps;
 const SPRITE_FRAMES = 1;
 const SPRITE_SRC_W  = 16;
 const SPRITE_SRC_H  = 16;
@@ -188,6 +202,7 @@ const audioBufs = {};
     special:    'sound/THPS_SPECIAL.oga',
     punch:      'sound/PUNCH_SOUND.wav',
     slam:       'sound/IMPACT_SOUND.wav',
+    skeletonDeath:'./sound/skeleton-death-sound.wav',
   };
   await Promise.all(Object.entries(files).map(async ([key, src]) => {
     try {
@@ -516,7 +531,7 @@ function makeEnemy(x) {
     type: 'enemy',
     alive: true, dying: false, deathTimer: 0, deathDuration: CFG.enemy.deathDuration,
     cleared: false, hit: false,
-    walkPhase: 0,
+    walkPhase: 0, animFrame: 0, animTimer: 0,
   };
 }
 
@@ -654,7 +669,7 @@ function spawnEnemyBurst(x, y, w, h) {
     const a = rand(0, Math.PI*2), sp = rand(150, 500), li = rand(0.5, 1.1);
     particles.push({ x: cx+rand(-w/3,w/3), y: cy+rand(-h/3,h/3),
       vx: Math.cos(a)*sp, vy: Math.sin(a)*sp - rand(60,200),
-      life: li, maxLife: li, color: C.obstacle, r: rand(3, 7) });
+      life: li, maxLife: li, color: C.bone, r: rand(3, 7) });
   }
   // Dark red splatter
   for (let i = 0; i < 20; i++) {
@@ -711,7 +726,9 @@ function updateEnemies(dt) {
     }
     if (!obs.alive||obs.cleared) continue;
     obs.x+=obs.vx*dt;
-    obs.walkPhase += dt * 10; // leg/arm animation speed
+    obs.walkPhase += dt * 10;
+    obs.animTimer += dt;
+    if (obs.animTimer >= 1 / SKEL_FPS) { obs.animTimer -= 1 / SKEL_FPS; obs.animFrame = (obs.animFrame + 1) % SKEL_FRAMES; }
     const left=obs.patrolX-obs.patrolRange, right=obs.patrolX+obs.patrolRange-obs.w;
     if (obs.x<left)  { obs.x=left;  obs.vx= Math.abs(obs.vx); }
     if (obs.x>right) { obs.x=right; obs.vx=-Math.abs(obs.vx); }
@@ -829,6 +846,7 @@ function doBonk(p, enemy) {
   p.grindTime = 0; p.hadGrind = false; p.vy = 0; p.onGround = false; p.olliePhase = 0;
 
   playBuf('punch');
+  playBuf('skeletonDeath');
 }
 function processTrickBatch(p) {
   const batch=p.trickBatch; if (!batch.length) return;
@@ -1709,88 +1727,18 @@ function render() {
 
       const cx     = obs.x + obs.w / 2;
       const facing = obs.vx >= 0 ? 1 : -1;
-      const walk   = obs.walkPhase;
 
-      // Legs — alternate up/down waddling
-      const legR    = obs.w * 0.18;
-      const legY    = obs.y + obs.h + legR * 0.6;
-      const legStep = Math.sin(walk) * legR * 0.9;
-      ctx.fillStyle = C.obstacle;
-      ctx.beginPath(); ctx.arc(cx - obs.w * 0.22, legY - legStep, legR, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.arc(cx + obs.w * 0.22, legY + legStep, legR, 0, Math.PI * 2); ctx.fill();
-
-      // Arms — facing arm lunges forward+up, back arm trails behind+down
-      const armR    = obs.w * 0.15;
-      const armMidY = obs.y + obs.h * 0.5;
-      ctx.fillStyle = C.obstacle;
-      ctx.beginPath(); ctx.arc(cx + facing * obs.w * 0.65, armMidY - obs.h * 0.18, armR, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.arc(cx - facing * obs.w * 0.60, armMidY + obs.h * 0.10, armR, 0, Math.PI * 2); ctx.fill();
-
-      // Body — rounded rect (lower rect + dome arc on top)
-      ctx.fillStyle = C.obstacle;
-      ctx.fillRect(obs.x, obs.y + obs.h * 0.2, obs.w, obs.h * 0.8);
-      ctx.beginPath();
-      ctx.arc(cx, obs.y + obs.h * 0.3, obs.w * 0.5, Math.PI, 0);
-      ctx.fill();
-
-      // Shift the whole face toward facing — makes direction unambiguous
-      const faceShift = facing * obs.w * 0.12;
-
-      // Eyes — white, wide apart
-      const eyeW   = Math.max(2, obs.w * 0.18);
-      const eyeH   = Math.max(2, obs.h * 0.19);
-      const eyeY   = obs.y + obs.h * 0.2;
-      const spread = obs.w * 0.21;
-      const lEyeX  = cx + faceShift - spread - eyeW / 2;
-      const rEyeX  = cx + faceShift + spread - eyeW / 2;
-      ctx.fillStyle = '#fff';
-      ctx.fillRect(lEyeX, eyeY, eyeW, eyeH);
-      ctx.fillRect(rEyeX, eyeY, eyeW, eyeH);
-
-      // Pupils — red, shoved hard toward the facing side
-      const pupilW = Math.max(1, eyeW * 0.5);
-      const pupilH = Math.max(1, eyeH * 0.6);
-      ctx.fillStyle = '#cc0000';
-      ctx.fillRect(lEyeX + eyeW * 0.5 + facing * eyeW * 0.3 - pupilW / 2, eyeY + eyeH * 0.2, pupilW, pupilH);
-      ctx.fillRect(rEyeX + eyeW * 0.5 + facing * eyeW * 0.3 - pupilW / 2, eyeY + eyeH * 0.2, pupilW, pupilH);
-
-      // Eyebrows — thick deep V-shape, inner corners plunge sharply
-      const browDrop = obs.h * 0.14;
-      const browY    = eyeY - obs.h * 0.04;
-      ctx.strokeStyle = '#1a0000';
-      ctx.lineWidth = Math.max(1.5, obs.h * 0.11);
-      ctx.lineCap = 'round';
-      ctx.beginPath(); // left brow: outer-left high, inner-right plunges
-      ctx.moveTo(lEyeX,          browY - browDrop * 0.1);
-      ctx.lineTo(lEyeX + eyeW,  browY + browDrop);
-      ctx.stroke();
-      ctx.beginPath(); // right brow: outer-right high, inner-left plunges
-      ctx.moveTo(rEyeX + eyeW,  browY - browDrop * 0.1);
-      ctx.lineTo(rEyeX,         browY + browDrop);
-      ctx.stroke();
-
-      // Mouth — grim line + two vampire fangs
-      const mouthHW = obs.w * 0.20;
-      const mouthY  = obs.y + obs.h * 0.58;
-      const mouthX  = cx + faceShift;
-      ctx.lineWidth = Math.max(1, obs.h * 0.07);
-      ctx.beginPath();
-      ctx.moveTo(mouthX - mouthHW, mouthY);
-      ctx.lineTo(mouthX + mouthHW, mouthY);
-      ctx.stroke();
-      const fangW = Math.max(2, obs.w * 0.08);
-      const fangH = Math.max(2, obs.h * 0.11);
-      ctx.fillStyle = '#fff';
-      [-0.5, 0.5].forEach(side => {
-        const fx = mouthX + side * mouthHW * 0.7;
-        ctx.beginPath();
-        ctx.moveTo(fx - fangW / 2, mouthY);
-        ctx.lineTo(fx + fangW / 2, mouthY);
-        ctx.lineTo(fx,             mouthY + fangH);
-        ctx.closePath(); ctx.fill();
-      });
-
-      ctx.lineWidth = 1; ctx.lineCap = 'butt';
+      // Scale sprite to match player visual height
+      const dh = (HEAD_H + PH + BH + WHEEL_R * 2) * CFG.enemy.skeleton.scale;
+      const dw = dh * (SKEL_FRAME_W / SKEL_FRAME_H);
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.translate(cx, obs.y + obs.h);
+      if (facing < 0) ctx.scale(-1, 1);
+      ctx.drawImage(skeletonWalkImg,
+        obs.animFrame * SKEL_FRAME_W, 0, SKEL_FRAME_W, SKEL_FRAME_H,
+        -dw / 2, -dh, dw, dh);
+      ctx.restore();
       ctx.globalAlpha = 1;
     } else {
       ctx.fillStyle=obs.hit?'#333':C.obstacle; ctx.fillRect(obs.x,obs.y-15,obs.w,obs.h);
