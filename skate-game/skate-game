@@ -1,0 +1,2237 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Skater - Dracula Edition</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      background: #1a1c24;
+      width: 100%; height: 100%;
+      overflow: hidden;
+      touch-action: none;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+    }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script type="application/json" id="cfg">
+{
+  "W": 480, "H": 700,
+  "GRAVITY": 1400,
+  "JUMP_VEL": -520,
+  "jumpBufferTime": 0.15,
+  "coyoteTime": 0.15,
+  "MOVE_SPEED": 280,
+  "GROUND_Y": 560,
+  "SCORE_PER_LIFE": 500,
+
+  "scale": 1.0,
+
+  "sizes": {
+    "playerW":       15,
+    "playerH":       20,
+    "headW":         20,
+    "headH":         16,
+    "boardW":        36,
+    "boardH":         2,
+    "boardOffsetY":   7,
+    "wheelR":         3,
+    "grindShift":    11,
+    "obstacleW":     15,
+    "obstacleMinH":  17,
+    "obstacleMaxH":  37,
+    "railMinW":      147,
+    "railMaxW":     400,
+    "railH":          3,
+    "railY":         28,
+    "particleMinSize": 1,
+    "particleMaxSize": 3,
+    "pitMinW":        160,
+    "pitMaxW":        320,
+    "pitDepth":       200,
+    "pitRampThreshold": 230,
+    "rampH":            55,
+    "rampEdgeGuard":    80,
+    "rampJumpBoost":   0.45,
+    "obstacleRespawnOffset": 50
+  },
+
+  "hud": {
+    "scoreFont":     28,
+    "livesFont":     24,
+    "fakieFont":     22,
+    "grindFont":     18,
+    "landHintFont":  22,
+    "airHintFont":   14,
+    "nextLifeFont":  14,
+    "msgFont":       18,
+    "subMsgFont":    22,
+    "hintBarFont":   15,
+    "hintBarH":      30
+  },
+
+  "parallax": {
+    "speed1":        0.12,
+    "speed2":        0.62,
+    "tileW":         480,
+    "far_minH":      80,
+    "far_maxH":      200,
+    "far_peaks":     10,
+    "far_smoothing": 0.1,
+    "far_spikiness":  1,
+    "near_minH":     15,
+    "near_maxH":     120,
+    "near_peaks":    12,
+    "near_smoothing":0.1,
+    "near_spikiness": 0.1,
+    "castle_scale":  0.95,
+    "castle_baseY":  15,
+    "ground_lineH":  60
+  },
+
+  "fakie": {
+    "trickSpeedMult": 1.35,
+    "jumpMult":       0.78
+  },
+
+  "squish": {
+    "landAmount":   0.15,
+    "landDuration": 0.18,
+    "jumpAmount":   0.13
+  },
+
+  "enemy": {
+    "w":             26,
+    "h":             26,
+    "speed":         110,
+    "patrolRange":   180,
+    "scoreKillMult": 3,
+    "bonkScore":     100,
+    "killBoostVY":   -420,
+    "deathDuration": 0.5,
+    "bonkDuration":  0.07,
+    "skeleton": {
+      "frames":  13,
+      "frameW":  22,
+      "frameH":  33,
+      "fps":     12,
+      "scale":   1.6
+    }
+  },
+
+  "colors": {
+    "bg":        "#282a36",
+    "bg2":       "#1e2029",
+    "ground":    "#44475a",
+    "mtn1":      "#2a1f3d",
+    "mtn2":      "#1a1228",
+    "castle1":   "#231838",
+    "castle2":   "#140d20",
+    "player":    "#bd93f9",
+    "board":     "#ff79c6",
+    "wheel":     "#f1fa8c",
+    "obstacle":  "#ff5555",
+    "obstacleH": "#ff6e6e",
+    "text":      "#f8f8f2",
+    "comment":   "#6272a4",
+    "cyan":      "#8be9fd",
+    "green":     "#50fa7b",
+    "orange":    "#ffb86c",
+    "flash":     "rgba(255,85,85,0.45)",
+    "bone":      "#f7ecd5"
+  },
+
+  "tutorial": {
+    "completeDuration": 5.0,
+    "completeBlinks":   4,
+    "fadeDuration":     1.2,
+    "teleportDelay":      1.2,
+    "teleportFadeDuration": 0.5,
+    "railApproachDist":   500,
+    "kickflipRideTime":   2.0
+  }
+}
+</script>
+<script>
+const CFG = JSON.parse(document.getElementById('cfg').textContent);
+const C = CFG.colors;
+
+// ── Canvas & Scaling ───────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = CFG.W, H = CFG.H;
+canvas.width = W; canvas.height = H;
+
+// ── Sprite sheet ───────────────────────────────────────────────────────────
+const vampireGlideImg = new Image();
+const vampireBackImg = new Image();
+vampireGlideImg.src = 'VampireFront.png';
+vampireBackImg.src = 'VampireBackAlt.png';
+const skeletonWalkImg = new Image();
+skeletonWalkImg.src = 'Skeleton_walk.png';
+const SKEL_FRAMES   = CFG.enemy.skeleton.frames;
+const SKEL_FRAME_W  = CFG.enemy.skeleton.frameW;
+const SKEL_FRAME_H  = CFG.enemy.skeleton.frameH;
+const SKEL_FPS      = CFG.enemy.skeleton.fps;
+const SPRITE_FRAMES = 1;
+const SPRITE_SRC_W  = 16;
+const SPRITE_SRC_H  = 16;
+const SPRITE_STRIDE = 24; // 16px frame + 8px gap between frames
+
+// ── Sound ──────────────────────────────────────────────────────────────────
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+const audioBufs = {};
+(async () => {
+  const files = {
+    pop:        'sound/SB_POP_SOUND.wav',
+    land:       'sound/SB_LAND_SOUND.wav',
+    grind:      'sound/GRIND_SOUND.wav',
+    getOffRail: 'sound/GET_OFF_RAIL.wav',
+    ride:       'sound/RIDING_SOUND.wav',
+    turn:       'sound/SB_TURN_SOUND.wav',
+    trick:      'sound/KICKFLIP_SOUND.wav',
+    special:    'sound/THPS_SPECIAL.oga',
+    punch:      'sound/PUNCH_SOUND.wav',
+    slam:       'sound/IMPACT_SOUND.wav',
+    skeletonDeath:'./sound/skeleton-death-sound.wav',
+  };
+  await Promise.all(Object.entries(files).map(async ([key, src]) => {
+    try {
+      const res = await fetch(src);
+      audioBufs[key] = await audioCtx.decodeAudioData(await res.arrayBuffer());
+    } catch(e) { console.warn('Audio load failed:', src); }
+  }));
+})();
+function playBuf(key, vol = 1) {
+  const buf = audioBufs[key];
+  if (!buf) return;
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  const g = audioCtx.createGain();
+  g.gain.value = vol;
+  src.connect(g);
+  g.connect(audioCtx.destination);
+  src.start();
+}
+const grindLoop = { src: null };
+const rideLoop  = { src: null };
+function startLoop(loop, key, vol) {
+  if (loop.src) return;
+  const buf = audioBufs[key];
+  if (!buf) return;
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.loop = true;
+  const g = audioCtx.createGain();
+  g.gain.value = vol;
+  src.connect(g);
+  g.connect(audioCtx.destination);
+  src.start();
+  loop.src = src;
+}
+function stopLoop(loop) {
+  if (!loop.src) return;
+  try { loop.src.stop(); } catch(e) {}
+  loop.src = null;
+}
+
+let touchScaleX = 1, touchScaleY = 1;
+function resizeCanvas() {
+  const sw = window.innerWidth;
+  const sh = window.innerHeight;
+  canvas.style.width  = sw + 'px';
+  canvas.style.height = sh + 'px';
+  touchScaleX = W / sw;
+  touchScaleY = H / sh;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// ── Keyboard (still works on desktop) ────────────────────────────────────
+const keys = {}, justPressed = {};
+window.addEventListener('keydown', e => {
+  if (!paused) audioCtx.resume();
+  if (!keys[e.code]) justPressed[e.code] = true;
+  keys[e.code] = true;
+  if (['Space','KeyK','KeyL','KeyJ','KeyS','KeyA','KeyD'].includes(e.code)) e.preventDefault();
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+function consumeJust(code) { const v = justPressed[code]; justPressed[code] = false; return v; }
+function clearJust() { for (const k in justPressed) justPressed[k] = false; }
+
+// ── Touch / Swipe System ───────────────────────────────────────────────────
+// Swipe map:
+//   Tap (short press)           → Space (ollie / land / start)
+//   Swipe Up (mostly vertical)  → Space (ollie)
+//   Swipe Up + horizontal       → KeyK  (kickflip)
+//   Swipe Left                  → KeyL  (shove-it)
+//   Swipe Right                 → KeyJ  (180)
+//   Swipe Down                  → Space (land trick) or KeyS (grind) based on state
+//
+// Grind type: 3 tap buttons rendered at bottom when near a rail
+const SWIPE_MIN = 15; // canvas px
+const PAUSE_BTN = { w: 44, h: 36 }; // top-right corner hit area
+
+let touchStart = null;
+
+function canvasPt(clientX, clientY) {
+  return { x: clientX * touchScaleX, y: clientY * touchScaleY };
+}
+
+canvas.addEventListener('touchstart', e => {
+  if (!paused) audioCtx.resume();
+  e.preventDefault();
+  const pt = canvasPt(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+
+  touchStart = { x: pt.x, y: pt.y, t: Date.now() };
+}, { passive: false });
+
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  if (!touchStart) return;
+  const pt = canvasPt(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+  const dx = pt.x - touchStart.x;
+  const dy = pt.y - touchStart.y;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+  const elapsed = Date.now() - touchStart.t;
+
+  // Pause button tap (top-right corner)
+  if ((gameState === 'playing' || gameState === 'tutorial') &&
+      dist < SWIPE_MIN && elapsed < 300 &&
+      touchStart.x >= W - PAUSE_BTN.w && touchStart.y <= PAUSE_BTN.h) {
+    togglePause();
+    touchStart = null; return;
+  }
+  if (paused) { touchStart = null; return; }
+
+  if (dist < SWIPE_MIN && elapsed < 300) {
+    // Tap → ollie / off rail
+    fireKey('Space');
+  } else if (dist >= SWIPE_MIN) {
+    const absDX = Math.abs(dx), absDY = Math.abs(dy);
+    // Classify direction: ratio > 2 = mostly vertical, < 0.5 = mostly horizontal, else diagonal
+    const ratio = absDY / (absDX || 0.001);
+    const pureVertical   = ratio > 2;
+    const pureHorizontal = ratio < 0.5;
+    const diagonal       = !pureVertical && !pureHorizontal;
+
+    if (dy < 0) {
+      // Upward swipe → kickflip (pure up) or tre-flip (up-right diagonal) if airborne
+      if (player && !player.onGround && player.trick === TRICK.NONE) {
+        if (diagonal && dx > 0) fireKey('KeyI'); // up-right = tre-flip
+        else                    fireKey('KeyK'); // up = kickflip
+      } else {
+        fireKey('Space');
+      }
+    } else if (dy > 0 && (pureVertical || diagonal)) {
+      // Downward swipe (pure or diagonal)
+      if (player && !player.onGround) {
+        // Set grind intent from diagonal direction
+        if (diagonal && dx < 0) player.grindIntent = '5-0';
+        else if (diagonal && dx > 0) player.grindIntent = 'NOSE GRIND';
+        else player.grindIntent = '50-50'; // pure down
+        // Unified action: land trick, bail, or grind
+        if (player.trickDone && player.trickLandWindow) {
+          fireKey('Space'); // land trick cleanly
+        } else if (player.trick !== TRICK.NONE && !player.trickDone) {
+          fireKey('Space'); // bail — Space mid-trick triggers fail
+        } else {
+          fireKey('KeyS');  // no trick → attempt grind with chosen intent
+        }
+      }
+    } else if (pureHorizontal) {
+      if (dx < 0) fireKey('KeyL'); // swipe left  = shove-it
+      else        fireKey('KeyJ'); // swipe right = 180
+    }
+  }
+  touchStart = null;
+}, { passive: false });
+
+canvas.addEventListener('touchcancel', e => { touchStart = null; }, { passive: false });
+
+function fireKey(code) {
+  justPressed[code] = true;
+  keys[code] = true;
+  setTimeout(() => { keys[code] = false; }, 80);
+}
+
+// ── Math utils ─────────────────────────────────────────────────────────────
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp  = (a, b, t) => a + (b - a) * t;
+const rand  = (a, b) => a + Math.random() * (b - a);
+
+// ── Constants ──────────────────────────────────────────────────────────────
+const GROUND_Y   = CFG.GROUND_Y;
+const S  = CFG.scale;           // ← master scale multiplier
+const SZ = CFG.sizes;           // raw size params (before scale)
+const HUD = CFG.hud;            // HUD font sizes (before scale)
+const PX  = CFG.parallax;       // parallax params
+
+// Game object sizes — all multiplied by S
+const PW             = SZ.playerW       * S;
+const PH             = SZ.playerH       * S;
+const HEAD_W         = SZ.headW         * S;
+const HEAD_H         = SZ.headH         * S;
+const BW             = SZ.boardW        * S;
+const BH             = SZ.boardH        * S;
+const BOARD_OFFSET_Y = SZ.boardOffsetY  * S;
+const WHEEL_R        = SZ.wheelR        * S;
+const GRIND_BOARD_TILT   = 0.45;
+const GRIND_PLAYER_SHIFT = SZ.grindShift * S;
+const TRICK = { NONE: 0, KICKFLIP: 1, SHOVEIT: 2, T180: 3, TREFLIP: 4 };
+
+// Helper: scaled HUD font string
+const hf  = (key) => `${Math.round(HUD[key] * S)}px monospace`;
+const hfb = (key) => `bold ${Math.round(HUD[key] * S)}px monospace`;
+
+const TRICK_NAMES = {
+  singles: {
+    1: { name: 'KICKFLIP',  pts: 120 },
+    2: { name: 'SHOVE-IT',  pts: 80  },
+    3: { name: '180',       pts: 100, fakieName: 'HALF CAB' },
+    4: { name: 'TRE FLIP',  pts: 350 },
+  },
+  combos: {
+    '3,3':   { name: '360',                 pts: 250, fakieName: 'FULL CAB'               },
+    '3,2':   { name: 'BIGSPIN',             pts: 220                                      },
+    '2,3':   { name: 'BIGSPIN',             pts: 220                                      },
+    '1,3':   { name: '180 KICKFLIP',        pts: 280, fakieName: 'HALF CAB KICKFLIP'      },
+    '3,1':   { name: '180 LATE KICKFLIP',   pts: 300, fakieName: 'HALF CAB LATE KICKFLIP' },
+    '1,1':   { name: 'DOUBLE KICKFLIP',     pts: 800                                      },
+    '2,2':   { name: '360 SHOVE-IT',        pts: 1000                                     },
+    '1,1,1': { name: 'TRIPLE KICKFLIP',     pts: 1350                                      },
+    '1,3,3': { name: '360 KICKFLIP',        pts: 600, fakieName: 'FULL CAB KICKFLIP'      },
+    '3,1,3': { name: '360 KICKFLIP',        pts: 600, fakieName: 'FULL CAB KICKFLIP'      },
+    '3,3,3': { name: '540',                 pts: 400                                      },
+    '1,3,1': { name: '180 DOUBLE KICKFLIP', pts: 600, fakieName: 'HALF CAB DOUBLE KICKFLIP'},
+    '1,3,1,3':{ name: '360 DOUBLE KICKFLIP',pts: 700, fakieName: 'FULL CAB DOUBLE KICKFLIP'},
+  },
+};
+
+// ── Player factory ─────────────────────────────────────────────────────────
+function makePlayer() {
+  return {
+    x: 120, y: GROUND_Y - PH,
+    vx: CFG.MOVE_SPEED, vy: 0,
+    onGround: true,
+    olliePhase: 0, ollieTimer: 0,
+    trick: TRICK.NONE, trickAngle: 0, trickTarget: 0,
+    trickSpeed: 0, trickDone: false, trickAxis: 'z',
+    trickLandWindow: false, trickFailed: false, boardDetached: false,
+    trickBatch: [], fakieAtJump: false,
+    bodyScaleX: 1, fakie: false,
+    boardNoseAngle: 0, boardTailAngle: 0,
+    jumpBuffer: 0,
+    coyoteTimer: 0,
+    alive: true, dying: false, deathTimer: 0, deathDuration: 0.7,
+    flashTimer: 0,
+    boardLostX: 0, boardLostY: 0, boardDistance: 0, popOffsetX: 0,
+    invincibleTimer: 0,
+    grindIntent: '50-50', grindType: '50-50',
+    grindBoardAngle: 0, grindPlayerShift: 0, rampAngle: 0, activeRamp: null,
+    grinding: false, grindRail: null, grindSparkTimer: 0,
+    grindTime: 0, preGrindBatch: [], hadGrind: false,
+    trick180Cooldown: 0,
+    squishTimer: 0,
+    animTimer: 0, animFrame: 0,
+  };
+}
+
+// ── World state ────────────────────────────────────────────────────────────
+let camX = 0, score = 0, lives = 3, livesFromScore = 0;
+let gameState = 'title';
+let paused = false, pauseTip = 0;
+function togglePause() {
+  paused = !paused;
+  if (paused) {
+    pauseTip = Math.floor(Math.random() * PAUSE_TIPS.length);
+    audioCtx.suspend();
+  } else {
+    audioCtx.resume();
+  }
+}
+const PAUSE_TIPS = [
+  'Chain tricks in the air for huge combo multipliers — land cleanly to cash out!',
+  'Grinding rails resets your trick combo and stacks extra points on top.',
+  'Nosebonk vampires mid-air to earn a score multiplier and a big upward boost.',
+  'Going fakie (riding backwards) makes tricks faster and scores style points.',
+  'Rack up LINE score by chaining jumps — fill the bar to earn an extra life!',
+];
+let flashTimer = 0, flashColor = C.flash;
+let lineMeeter = 0;
+let lineMeeterPersist = 0;
+let screenMsg = '', screenMsgTimer = 0, screenMsgColor = C.text;
+let screenMsg2 = '', screenMsgTimer2 = 0, screenMsgColor2 = C.green;
+let particles = [], deathPieces = [];
+let player, obstacles;
+let pitRespawnX = null;  // set when player falls in pit, used on next respawn
+
+// ── Tutorial state ─────────────────────────────────────────────────────────
+let titleSkipTutorial = localStorage.getItem('skipTutorial') === 'true';
+let tutStep = 0;          // 0=ollie, 1=kickflip, 2=grind, 3=done
+let tutComplete = false;
+let tutCompleteTimer = 0;
+let tutKickflipReady = false;
+let tutKickflipRideTimer = 0; // ride time after landing kickflip before teleport
+let tutTeleportTimer = 0;     // counts down, fades to black before teleporting
+let tutTeleportFadeIn = 0;   // counts down, fades from black after teleporting
+let tutNextStep = -1;         // if >= 0, advance to this stage on teleport
+let sceneTransitionTimer = 0; // fade-in after scene switch
+const TUT_STAGE_X = [120, 450, 800]; // respawn X for each stage
+
+// ── Obstacles ──────────────────────────────────────────────────────────────
+const CHUNK_W             = 900;   // world-width of each generated chunk
+const CHUNK_AHEAD         = 3;     // chunks to keep ahead of player
+const CHUNK_BEHIND        = 1;     // chunks to keep behind before pruning
+const MIN_GAP_BOX         = 220;   // min run-up gap before a box
+const MIN_GAP_RAIL        = 320;   // min run-up gap before a rail
+const MIN_GAP_AFTER_RAIL  = 120;   // min clear space after rail end
+
+let worldFrontier = 0;  // rightmost generated x
+
+function makeObstacle(x) {
+  const h = (rand(SZ.obstacleMinH, SZ.obstacleMaxH) * S) | 0;
+  return { x, y: GROUND_Y - h + 18, w: SZ.obstacleW * S, h, cleared: false, hit: false };
+}
+function makeRail(x, deadly = false) {
+  const w = (rand(SZ.railMinW, SZ.railMaxW) * S) | 0;
+  return { x, y: GROUND_Y - SZ.railY * S, w, h: SZ.railH * S, type: deadly ? 'rail-deadly' : 'rail', cleared: false, hit: false };
+}
+
+
+function makeRamp(pitX, pitW) {
+  const rh = SZ.rampH * S;
+  const rw = Math.max(60 * S, pitW * 0.45);
+  const angle = Math.atan2(rh, rw);
+  // Right edge flush with pit left edge — no gap
+  return { x: pitX - rw, y: GROUND_Y - rh, w: rw, h: rh,
+           angle, type: 'ramp', cleared: false, hit: false };
+}
+
+function makePit(x) {
+  const w = (rand(SZ.pitMinW, SZ.pitMaxW) * S) | 0;
+  const pit = { x, y: GROUND_Y, w, h: SZ.pitDepth * S, type: 'pit', cleared: false, hit: false };
+  pit.ramp = w >= SZ.pitRampThreshold * S ? makeRamp(x, w) : null;
+  return pit;
+}
+function makeEnemy(x) {
+  const ew = CFG.enemy.w * S, eh = CFG.enemy.h * S;
+  return {
+    x, y: GROUND_Y - eh,
+    w: ew, h: eh,
+    patrolX: x + ew / 2, patrolRange: CFG.enemy.patrolRange * S,
+    vx: CFG.enemy.speed,
+    type: 'enemy',
+    alive: true, dying: false, deathTimer: 0, deathDuration: CFG.enemy.deathDuration,
+    cleared: false, hit: false,
+    walkPhase: 0, animFrame: 0, animTimer: 0,
+  };
+}
+
+function generateChunk(chunkX, difficulty) {
+  const result = [];
+  let x = chunkX + rand(180, 280);
+  const chunkEnd = chunkX + CHUNK_W;
+
+  // Weights at difficulty=0 → difficulty=1 (normalized automatically)
+  //                  base   + scale * difficulty
+  const WEIGHTS = [
+    { type: 'rail',  base: 0.30, scale:  0.20 },
+    { type: 'pair',  base: 0.15, scale:  0.25 },
+    { type: 'pit',   base: 0.25, scale:  0.10 },
+    { type: 'enemy', base: 0.10, scale:  0.10 },
+    { type: 'box',   base: 0.12, scale: -0.20 },
+  ];
+
+  function pickType() {
+    let total = 0;
+    const table = WEIGHTS.map(w => ({ type: w.type, w: Math.max(0, w.base + w.scale * difficulty) }));
+    for (const e of table) total += e.w;
+    let roll = Math.random() * total;
+    for (const e of table) { roll -= e.w; if (roll <= 0) return e.type; }
+    return 'box';
+  }
+
+  while (x < chunkEnd - 120) {
+    switch (pickType()) {
+      case 'rail': {
+        x += rand(MIN_GAP_RAIL, MIN_GAP_RAIL + 120 * (1 - difficulty));
+        if (x >= chunkEnd - 80) return result;
+        const rail = makeRail(x, Math.random() < difficulty);
+        result.push(rail);
+        x = rail.x + rail.w + rand(MIN_GAP_AFTER_RAIL, MIN_GAP_AFTER_RAIL + 160);
+        break;
+      }
+      case 'pair': {
+        x += rand(MIN_GAP_BOX, MIN_GAP_BOX + 100 * (1 - difficulty));
+        if (x >= chunkEnd - 80) return result;
+        result.push(makeObstacle(x));
+        x += rand(80, 140);
+        if (x < chunkEnd - 60) result.push(makeObstacle(x));
+        x += rand(MIN_GAP_BOX, MIN_GAP_BOX + 80);
+        break;
+      }
+      case 'pit': {
+        x += rand(280, 400);
+        if (x >= chunkEnd - 80) return result;
+        const pit = makePit(x);
+        if (pit.ramp) result.push(pit.ramp);
+        result.push(pit);
+        x = pit.x + pit.w + rand(200, 320);
+        break;
+      }
+      case 'enemy': {
+        x += rand(MIN_GAP_BOX, MIN_GAP_BOX + 150 * (1 - difficulty));
+        if (x >= chunkEnd - 40) return result;
+        result.push(makeEnemy(x));
+        x += rand(MIN_GAP_BOX, MIN_GAP_BOX + 80);
+        break;
+      }
+      case 'box': {
+        x += rand(MIN_GAP_BOX, MIN_GAP_BOX + 150 * (1 - difficulty));
+        if (x >= chunkEnd - 40) return result;
+        result.push(makeObstacle(x));
+        break;
+      }
+    }
+  }
+  return result;
+}
+
+function extendObstacles() {
+  const targetFrontier = camX + W + CHUNK_AHEAD * CHUNK_W;
+  while (worldFrontier < targetFrontier) {
+    const difficulty = Math.min(1, worldFrontier / 25000);
+    obstacles.push(...generateChunk(worldFrontier, difficulty));
+    worldFrontier += CHUNK_W;
+  }
+  // Prune far-behind obstacles
+  const pruneX = camX - CHUNK_BEHIND * CHUNK_W;
+  if (obstacles.length > 60) {
+    let i = 0;
+    while (i < obstacles.length && obstacles[i].x + (obstacles[i].w || 0) < pruneX) i++;
+    if (i > 0) obstacles.splice(0, i);
+  }
+}
+
+function initGame() {
+  player = makePlayer();
+  obstacles = [];
+  worldFrontier = 400;
+  pitRespawnX = null;
+  camX = 0; score = 0; lives = 3; livesFromScore = 0;
+  lineMeeter = 0;
+  lineMeeterPersist = 0;
+  flashTimer = 0; particles = []; deathPieces = [];
+  extendObstacles();
+  initParallaxBuffers();
+}
+
+function initTutorial() {
+  player = makePlayer();
+  obstacles = [];
+  worldFrontier = 999999; // suppress procedural generation
+  pitRespawnX = null;
+  camX = 0; score = 0; lives = 3; livesFromScore = 0;
+  flashTimer = 0; particles = []; deathPieces = [];
+  screenMsg = ''; screenMsgTimer = 0;
+  screenMsg2 = ''; screenMsgTimer2 = 0;
+
+  tutStep = 0;
+  tutComplete = false;
+  tutCompleteTimer = 0;
+  tutKickflipReady = false;
+  tutKickflipRideTimer = 0;
+  tutTeleportTimer = 0;
+  tutTeleportFadeIn = 0;
+  tutNextStep = -1;
+  initParallaxBuffers();
+}
+
+// ── Particles ──────────────────────────────────────────────────────────────
+function spawnParticles(x, y, n, color) {
+  for (let i = 0; i < n; i++) {
+    const a = rand(0, Math.PI*2), sp = rand(80,260), li = rand(0.4,0.9);
+    particles.push({ x, y, vx: Math.cos(a)*sp, vy: Math.sin(a)*sp-100, life: li, maxLife: li, color, r: rand(SZ.particleMinSize, SZ.particleMaxSize) });
+  }
+}
+function spawnEnemyBurst(x, y, w, h) {
+  const cx = x + w/2, cy = y + h/2;
+  // Chunky red body pieces — fast, big
+  for (let i = 0; i < 30; i++) {
+    const a = rand(0, Math.PI*2), sp = rand(150, 500), li = rand(0.5, 1.1);
+    particles.push({ x: cx+rand(-w/3,w/3), y: cy+rand(-h/3,h/3),
+      vx: Math.cos(a)*sp, vy: Math.sin(a)*sp - rand(60,200),
+      life: li, maxLife: li, color: C.bone, r: rand(3, 7) });
+  }
+  // Dark red splatter
+  for (let i = 0; i < 20; i++) {
+    const a = rand(0, Math.PI*2), sp = rand(80, 320), li = rand(0.4, 0.9);
+    particles.push({ x: cx+rand(-w/2,w/2), y: cy+rand(-h/2,h/2),
+      vx: Math.cos(a)*sp, vy: Math.sin(a)*sp - rand(40,160),
+      life: li, maxLife: li, color: '#7a0000', r: rand(2, 5) });
+  }
+  // White eye/fang shards
+  for (let i = 0; i < 12; i++) {
+    const a = rand(0, Math.PI*2), sp = rand(200, 600), li = rand(0.3, 0.7);
+    particles.push({ x: cx, y: y + h*0.3,
+      vx: Math.cos(a)*sp, vy: Math.sin(a)*sp - 200,
+      life: li, maxLife: li, color: '#fff', r: rand(1, 3) });
+  }
+}
+function updateParticles(dt) {
+  for (const p of particles) { p.x+=p.vx*dt; p.y+=p.vy*dt; p.vy+=600*dt; p.life-=dt; }
+  particles = particles.filter(p => p.life > 0);
+}
+
+// ── Death pieces ──────────────────────────────────────────────────────────
+function spawnDeathEffect(p) {
+  const cx = p.x+PW/2, bcy = p.y+PH+BOARD_OFFSET_Y;
+  deathPieces = [];
+  const cols = ['#2d1b4e','#2d1b4e','#44475a','#f8f8f2','#ff5555','#bd93f9'];
+  for (let i = 0; i < 32; i++) {
+    const a=rand(0,Math.PI*2), sp=rand(120,400), li=rand(0.6,1.3);
+    deathPieces.push({ type:'rect', x:cx+rand(-PW/2,PW/2), y:p.y+rand(0,PH+HEAD_H),
+      vx:Math.cos(a)*sp, vy:Math.sin(a)*sp-rand(80,220), rot:rand(0,Math.PI*2),
+      rotSpeed:rand(-8,8), w:rand(3,10), h:rand(3,10), life:li, maxLife:li, color:cols[i%cols.length] });
+  }
+  const bl=1.2;
+  deathPieces.push({ type:'board', x:cx, y:bcy, vx:rand(-60,-20), vy:rand(-300,-180),
+    rot:0, rotSpeed:rand(4,8), life:bl, maxLife:bl, color:C.board });
+  for (let i=0;i<2;i++) {
+    const d=i===0?-1:1, li=rand(0.8,1.1);
+    deathPieces.push({ type:'wheel', x:cx+d*(BW/2-6), y:bcy+WHEEL_R*0.5,
+      vx:d*rand(150,300), vy:rand(-350,-200), rot:0, rotSpeed:d*rand(10,18),
+      r:WHEEL_R+1, life:li, maxLife:li, color:C.wheel });
+  }
+}
+function updateDeathPieces(dt) {
+  for (const p of deathPieces) { p.x+=p.vx*dt; p.y+=p.vy*dt; p.vy+=900*dt; p.rot+=p.rotSpeed*dt; p.life-=dt; }
+  deathPieces = deathPieces.filter(p => p.life > 0);
+}
+function updateEnemies(dt) {
+  for (const obs of obstacles) {
+    if (obs.type!=='enemy') continue;
+    if (obs.dying) {
+      obs.deathTimer-=dt;
+      if (obs.deathTimer<=0) { obs.dying=false; obs.cleared=true; }
+      continue;
+    }
+    if (!obs.alive||obs.cleared) continue;
+    obs.x+=obs.vx*dt;
+    obs.walkPhase += dt * 10;
+    obs.animTimer += dt;
+    if (obs.animTimer >= 1 / SKEL_FPS) { obs.animTimer -= 1 / SKEL_FPS; obs.animFrame = (obs.animFrame + 1) % SKEL_FRAMES; }
+    const left=obs.patrolX-obs.patrolRange, right=obs.patrolX+obs.patrolRange-obs.w;
+    if (obs.x<left)  { obs.x=left;  obs.vx= Math.abs(obs.vx); }
+    if (obs.x>right) { obs.x=right; obs.vx=-Math.abs(obs.vx); }
+  }
+}
+function drawDeathPieces() {
+  for (const p of deathPieces) {
+    const t = p.life/p.maxLife;
+    ctx.save(); ctx.globalAlpha = Math.min(1,t*1.5);
+    ctx.translate(p.x,p.y); ctx.rotate(p.rot);
+    if (p.type==='rect') { ctx.fillStyle=p.color; ctx.fillRect(-p.w/2,-p.h/2,p.w,p.h); }
+    else if (p.type==='board') {
+      ctx.fillStyle=p.color;
+      const x0=-BW/2;
+      ctx.beginPath(); ctx.moveTo(x0,0-4); ctx.lineTo(x0+6,0); ctx.lineTo(x0+BW-6,0);
+      ctx.lineTo(x0+BW,-4); ctx.lineTo(x0+BW,-4-BH); ctx.lineTo(x0,-4-BH);
+      ctx.closePath(); ctx.fill();
+    } else { ctx.fillStyle=p.color; ctx.beginPath(); ctx.arc(0,0,p.r,0,Math.PI*2); ctx.fill(); }
+    ctx.restore(); ctx.globalAlpha=1;
+  }
+}
+
+// ── Trick logic ───────────────────────────────────────────────────────────
+// Air boost applied to vy each time a trick is started mid-air.
+// Values are upward impulse (negative = up). Diminishes with each successive trick.
+const TRICK_AIR_BOOST = {
+  [TRICK.KICKFLIP]: -200,
+  [TRICK.SHOVEIT]:  -260,
+  [TRICK.T180]:     -220,
+  [TRICK.TREFLIP]:  -300,
+};
+const TRICK_BOOST_DECAY = 0.75;  // each successive trick gives this fraction of previous
+
+function startTrick(p, type) {
+  if (p.onGround||p.trickFailed) return;
+  if (type===TRICK.T180 && p.trick180Cooldown > 0) return;
+  if (type===TRICK.T180 && p.trick!==TRICK.NONE) {
+    if (p.trickDone && p.trickLandWindow) tryLandTrick(p); // auto-catch completed trick
+    else { failTrick(p); return; }                         // bail mid-trick, same as Space
+  }
+  if (p.trick!==TRICK.NONE) return;
+  p.trick=type; p.trickAngle=0; p.trickDone=false; p.trickLandWindow=false;
+  if (type===TRICK.KICKFLIP) { p.trickTarget=Math.PI*2; p.trickSpeed=Math.PI*9.5; p.trickAxis='x'; playBuf('trick', 0.125); }
+  else if (type===TRICK.SHOVEIT) { p.trickTarget=Math.PI; p.trickSpeed=Math.PI*3.5; p.trickAxis='y'; playBuf('turn', 0.125); }
+  else if (type===TRICK.T180) { p.trickTarget=Math.PI; p.trickSpeed=Math.PI*7.2; p.trickAxis='y180'; playBuf('turn', 0.125); }
+  else if (type===TRICK.TREFLIP)  { p.trickTarget=Math.PI*2; p.trickSpeed=Math.PI*4.5;  p.trickAxis='treflip'; playBuf('turn', 0.125); }
+  if (p.fakie) p.trickSpeed *= CFG.fakie.trickSpeedMult;
+
+  // Air boost: extend the jump, diminishing with each trick in the combo
+  const base = TRICK_AIR_BOOST[type] ?? -150;
+  const boost = base * Math.pow(TRICK_BOOST_DECAY, p.trickBatch.length);
+  // Only boost if still going up or near apex — don't reverse a heavy fall
+  if (p.vy < 80) p.vy = Math.max(p.vy + boost, CFG.JUMP_VEL * 0.85);
+}
+function updateTrick(p, dt) {
+  if (p.trick===TRICK.NONE||p.trickDone) return;
+  p.boardDistance=15; p.trickAngle+=p.trickSpeed*dt;
+  if (p.trickAngle>=p.trickTarget-0.05) {
+    p.trickAngle=p.trickTarget; p.trickDone=true; p.trickLandWindow=true;
+    if (p.trick===TRICK.T180) { tryLandTrick(p); p.trick180Cooldown = 0.2; }
+  }
+}
+function tryLandTrick(p) {
+  if (!p.trickDone||!p.trickLandWindow||p.onGround) return;
+  // playSound(sndCatch);
+  p.trickBatch.push(p.trick); resetTrick(p, true);
+}
+function resetTrick(p, landed) {
+  const was=p.trick;
+  p.trick=TRICK.NONE; p.trickAngle=0; p.trickTarget=0;
+  p.trickDone=false; p.trickLandWindow=false; p.boardDetached=false; p.trickAxis='z';
+  if (landed && was===TRICK.T180) { p.fakie=!p.fakie; p.bodyScaleX=p.fakie?-1:1; }
+}
+function failTrick(p) {
+  if (p.trickFailed||p.dying) return;
+  p.trickFailed=true; p.boardDetached=true;
+  p.boardLostX=p.x; p.boardLostY=p.y+PH+BOARD_OFFSET_Y;
+  p.trickBatch=[]; resetTrick(p,false);
+  respawnIfBailedOverPit(p);
+  loseLife('BAILED!');
+}
+
+function respawnIfBailedOverPit(p) {
+  const pcx = p.x + PW / 2;
+  // if player is over a pit, respawn past its right edge
+  const pitUnder = obstacles.find(o => !o.cleared && !o.hit && o.type === 'pit' && pcx > o.x && pcx < o.x + o.w);
+  if (pitUnder) {
+    pitRespawnX = pitUnder.x + pitUnder.w + SZ.obstacleRespawnOffset * S;
+  }
+}
+
+const GRIND_PTS_PER_SEC = { '50-50':40, 'NOSE GRIND':55, '5-0':45 };
+function resolveBatch(batch, fakie) {
+  if (!batch.length) return {name:'',pts:0};
+  const res = e => [(fakie&&e.fakieName)?e.fakieName:e.name, e.pts];
+  if (batch.length===1) { const e=TRICK_NAMES.singles[batch[0]]; const [n,p]=e?res(e):['TRICK',50]; return {name:n,pts:p}; }
+  const e=TRICK_NAMES.combos[batch.join(',')];
+  if (e) { const [n,p]=res(e); return {name:n,pts:p}; }
+  return { name:batch.map(t=>TRICK_NAMES.singles[t]?.name||'TRICK').join(' '), pts:batch.reduce((s,t)=>s+(TRICK_NAMES.singles[t]?.pts||0),0)+batch.length*50 };
+}
+function processGrindLanding(p) {
+  p.hadGrind=false;
+  const fi=resolveBatch(p.preGrindBatch,p.fakieAtJump), fo=resolveBatch(p.trickBatch,p.fakie);
+  p.preGrindBatch=[]; p.trickBatch=[];
+  const gp=Math.round(p.grindTime*(GRIND_PTS_PER_SEC[p.grindType]??40));
+  const total=gp+Math.round(fi.pts*1.5)+Math.round(fo.pts*2);
+  const parts=[]; if(fi.name)parts.push(fi.name); parts.push(p.grindType); if(fo.name)parts.push(fo.name);
+  score+=total; showMsg(parts.join(' → ')+'!  +'+total, C.cyan);
+  lineMeeter+=total;
+  lineMeeterPersist += total;
+  spawnParticles(p.x+PW/2,p.y,12,C.cyan);
+}
+function doBonk(p, enemy) {
+  enemy.vx = 0; // freeze enemy patrol during bonk
+  p.grinding = true; p.grindRail = enemy; p.grindType = 'NOSE GRIND';
+  p.preGrindBatch = [...p.trickBatch]; p.trickBatch = [];
+  p.grindTime = 0; p.hadGrind = false; p.vy = 0; p.onGround = false; p.olliePhase = 0;
+
+  playBuf('punch');
+  playBuf('skeletonDeath');
+}
+function processTrickBatch(p) {
+  const batch=p.trickBatch; if (!batch.length) return;
+  p.trickBatch=[];
+  const {name,pts}=resolveBatch(batch,p.fakieAtJump);
+  const CAB=['HALF CAB','FULL CAB'];
+  const pfx=p.fakieAtJump&&!CAB.some(c=>name.startsWith(c))?'FAKIE ':'';
+  score+=pts; showMsg(pfx+name+'!  +'+pts, C.green);
+  lineMeeter+=pts;
+  lineMeeterPersist += pts;
+  spawnParticles(p.x+PW/2,p.y,8+batch.length*4,C.green);
+}
+
+// ── Ollie ─────────────────────────────────────────────────────────────────
+function startOllie(p) {
+  if (!p.onGround||p.olliePhase!==0) return;
+  p.olliePhase=1; p.ollieTimer=0.06; p.boardNoseAngle=0;
+  p.trickBatch=[]; p.fakieAtJump=p.fakie; p.grindIntent='50-50';
+}
+function updateOllie(p, dt) {
+  if (p.olliePhase===1) {
+    p.ollieTimer-=dt;
+    const t=1-clamp(p.ollieTimer/0.06,0,1);
+    p.boardNoseAngle=lerp(0,0.4,t); p.boardTailAngle=lerp(0,-0.15,t);
+    p.boardDistance=lerp(0,10,t); p.popOffsetX=lerp(0,5*(p.fakie?4:-1),t);
+    if (p.ollieTimer<=0) {
+      const jumpMult = p.fakie ? CFG.fakie.jumpMult : 1;
+      if (p.activeRamp) {
+        // Normal jump + extra upward boost from ramp slope
+        const ang = p.activeRamp.angle;
+        const bonus = -Math.abs(CFG.JUMP_VEL) * Math.sin(ang) * SZ.rampJumpBoost;
+        p.vy = (CFG.JUMP_VEL + bonus) * jumpMult;
+        p.activeRamp.cleared = true;
+        p.activeRamp = null;
+      } else {
+        p.vy = CFG.JUMP_VEL * jumpMult;
+      }
+      p.onGround=false; p.olliePhase=2;
+      playBuf('pop');
+      p.boardNoseAngle=p.fakie?-4.3:4.3; p.boardTailAngle=p.fakie?-4.1:4.1;
+    }
+  } else if (p.olliePhase===2) {
+    p.boardNoseAngle=lerp(p.boardNoseAngle,0,dt*6);
+    p.boardTailAngle=lerp(p.boardTailAngle,0,dt*6);
+    p.popOffsetX=lerp(p.popOffsetX,0,dt*6);
+    p.boardDistance=lerp(p.boardDistance,p.trickDone?10:0,dt*6);
+
+  } else if (p.olliePhase===3) {
+    p.boardDistance=0; p.ollieTimer-=dt; if (p.ollieTimer<=0) p.olliePhase=0;
+  }
+}
+
+// ── Messaging / lives ─────────────────────────────────────────────────────
+function showMsg(msg, color) { screenMsg=msg; screenMsgTimer=1.8; screenMsgColor=color||C.text; }
+function showSubMsg(msg, color) { screenMsg2=msg; screenMsgTimer2=1.8; screenMsgColor2=color||C.green; }
+function loseLife(reason) {
+  if (player.dying) return;
+  if (gameState !== 'tutorial') playBuf('slam');
+  if (gameState !== 'tutorial') lives=Math.max(0,lives-1);
+  player.dying=true; player.alive=false; player.deathTimer=player.deathDuration; player.vx=0;
+  if (gameState !== 'tutorial') { spawnDeathEffect(player); flashTimer=0.4; flashColor=C.flash; }
+  showMsg(reason+(gameState!=='tutorial'&&lives>0?'  ❤ x'+lives:''), C.obstacle);
+}
+
+// ── Grind helpers ─────────────────────────────────────────────────────────
+function findApproachRail(p) {
+  for (const obs of obstacles) {
+    if (obs.type!=='rail' && obs.type!=='rail-deadly' && obs.type!=='enemy') continue;
+    if (obs.cleared||obs.hit) continue;
+    if (obs.type==='enemy' && (!obs.alive||obs.dying)) continue;
+    const dist=obs.x-(p.x+PW);
+    if (p.x>obs.x+obs.w||dist>80) continue;
+    if (Math.abs((p.y+PH)-obs.y)<90) return obs;
+  }
+  return null;
+}
+function spawnGrindSparks(p) {
+  p.grindSparkTimer-=1; if (p.grindSparkTimer>0) return; p.grindSparkTimer=2;
+  const ry=p.grindRail.y, cx=p.x+PW/2;
+  const bk=cx-BW/2+6, fr=cx+BW/2-6;
+  const col=()=>Math.random()<0.5?C.orange:C.wheel;
+  if (p.grindType==='NOSE GRIND') spawnParticles(fr,ry,3,col());
+  else if (p.grindType==='5-0') spawnParticles(bk,ry,3,col());
+  else { spawnParticles(bk,ry,2,col()); spawnParticles(fr,ry,2,col()); }
+}
+
+function getScoreToNextLife() {
+  return CFG.SCORE_PER_LIFE * Math.min(lives, 3);
+}
+
+// ── Update player ─────────────────────────────────────────────────────────
+function updatePlayer(dt) {
+  const p=player;
+
+  if (p.dying) {
+    p.deathTimer-=dt; updateDeathPieces(dt);
+    if (p.deathTimer<=0) {
+      p.dying=false;
+      if (lives<=0) { gameState='gameover'; return; }
+      lineMeeter = 0;
+      lineMeeterPersist = 0;
+      const np=makePlayer();
+      np.x = pitRespawnX !== null ? pitRespawnX : Math.max(120,camX+80);
+      np.y=GROUND_Y-PH-BH; pitRespawnX=null;
+      np.invincibleTimer=3; player=np; deathPieces=[]; screenMsg='';
+    }
+    return;
+  }
+  if (!p.alive) return;
+
+  // Line meeter → life bonus
+  if (lineMeeter > getScoreToNextLife()) {
+    lives+=1;
+    lineMeeter = 0;
+    playBuf('special', 0.125);
+    showSubMsg('+'+1+' LIFE!',C.green); flashTimer=0.2; flashColor='rgba(80,250,123,0.3)';
+  }
+
+  if (p.onGround) {
+    startLoop(rideLoop, 'ride', 0.25);
+  } else {
+    stopLoop(rideLoop);
+  }
+
+  // Grinding
+  if (p.grinding) {
+    startLoop(grindLoop, 'grind', 0.25);
+    const rail=p.grindRail;
+    p.x+=p.vx*dt; p.y=lerp(p.y,rail.y-PH-16,Math.min(1,dt*18));
+    p.vy=0; p.grindTime+=dt;
+    const tt=p.grindType==='5-0'?-GRIND_BOARD_TILT:p.grindType==='NOSE GRIND'?GRIND_BOARD_TILT:0;
+    const ts=p.grindType==='5-0'?-GRIND_PLAYER_SHIFT:p.grindType==='NOSE GRIND'?GRIND_PLAYER_SHIFT:0;
+    p.grindBoardAngle=lerp(p.grindBoardAngle,tt,dt*8);
+    p.grindPlayerShift=lerp(p.grindPlayerShift,ts,dt*8);
+    spawnGrindSparks(p);
+    // Enemy bonk: auto-jump off after bonkDuration
+    if (rail.type==='enemy' && p.grindTime>=CFG.enemy.bonkDuration) {
+      p.grinding=false; p.grindRail=null; stopLoop(grindLoop);
+      rail.alive=false; rail.dying=false; rail.cleared=true;
+      const pre=resolveBatch(p.preGrindBatch,p.fakieAtJump); p.preGrindBatch=[];
+      const total=Math.round((CFG.enemy.bonkScore+Math.round(pre.pts*1.5))*CFG.enemy.scoreKillMult);
+      const parts=[]; if(pre.name)parts.push(pre.name); parts.push('NOSEBONK');
+      score+=total; showMsg(parts.join(' → ')+'!  +'+total, C.cyan);
+      lineMeeter+=total;
+      lineMeeterPersist += total;
+      spawnEnemyBurst(rail.x, rail.y, rail.w, rail.h);
+      spawnParticles(p.x+PW/2, p.y, 12, C.cyan);
+      flashTimer=0.15; flashColor=C.flash;
+      p.fakieAtJump=p.fakie; p.vy=CFG.enemy.killBoostVY;
+      p.onGround=false; p.olliePhase=2; p.trickFailed=false;
+      camX=p.x-160; return;
+    }
+    if (consumeJust('Space')) {
+      p.grinding=false; p.grindRail=null; p.hadGrind=true;
+      p.fakieAtJump=p.fakie; p.vy=CFG.JUMP_VEL*0.75*(p.fakie?CFG.fakie.jumpMult:1); p.onGround=false; p.olliePhase=2;
+      playBuf('getOffRail', 0.125);
+    }
+    if (p.x>rail.x+rail.w) {
+      p.grinding=false; p.grindRail=null; p.hadGrind=true; rail.cleared=true;
+    }
+    if (!p.grinding) { stopLoop(grindLoop); }
+    p.animTimer+=dt; if(p.animTimer>=1/6){p.animTimer-=1/6;p.animFrame=(p.animFrame+1)%SPRITE_FRAMES;}
+    camX=p.x-160; return;
+  }
+
+  // Grind / bonk approach
+  if (!p.onGround) {
+    const ar=findApproachRail(p);
+    if (ar&&p.trick===TRICK.NONE&&consumeJust('KeyS')) {
+      if (ar.type==='enemy') {
+        doBonk(p, ar);
+      } else {
+        p.grinding=true; p.grindRail=ar; p.grindType=p.grindIntent;
+        p.preGrindBatch=[...p.trickBatch]; p.trickBatch=[];
+        p.grindTime=0; p.hadGrind=false; p.vy=0; p.onGround=false; p.olliePhase=0;
+
+        playBuf('getOffRail', 0.5);
+      }
+    }
+  }
+
+  const wasOnGround = p.onGround;
+  p.x+=p.vx*dt;
+  if (!p.onGround) p.vy+=CFG.GRAVITY*dt;
+  p.y+=p.vy*dt;
+
+  // Detect pit below player's feet
+  let pitBelow = null;
+  if (!p.grinding) {
+    for (const obs of obstacles) {
+      if (obs.type !== 'pit' || obs.cleared || obs.hit) continue;
+      const footX = p.x + PW / 2;
+      if (footX > obs.x && footX < obs.x + obs.w) { pitBelow = obs; break; }
+    }
+  }
+
+  // Ramp surface detection — is player riding on a ramp?
+  let rampBelow = null;
+  if (!p.grinding && !pitBelow) {
+    for (const obs of obstacles) {
+      if (obs.type !== 'ramp' || obs.cleared || obs.hit) continue;
+      const footX = p.x + PW / 2;
+      if (footX >= obs.x && footX <= obs.x + obs.w + SZ.rampEdgeGuard * S) {
+        rampBelow = obs;
+        break;
+      }
+    }
+  }
+  if (rampBelow) {
+    // Surface y at player foot x: lerp from (obs.x, GROUND_Y) to (obs.x+obs.w, obs.y)
+    const t = (p.x + PW / 2 - rampBelow.x) / rampBelow.w;
+    const surfaceY = GROUND_Y + (rampBelow.y - GROUND_Y) * t - PH - BH - WHEEL_R * 2;
+    if (p.y >= surfaceY - 4) {
+      p.y = surfaceY;
+      p.vy = Math.min(p.vy, 0);
+      if (!p.onGround) { processTrickBatch(p); p.trickFailed = false; playBuf('land'); }
+      p.onGround = true;
+      if (p.jumpBuffer > 0 && !p.dying) { p.jumpBuffer=0; p.olliePhase=0; startOllie(p); }
+    }
+    p.rampAngle = lerp(p.rampAngle, rampBelow.angle, 0.25);
+    p.activeRamp = rampBelow;
+  } else if (p.onGround) {
+    // Just left the ramp tip — launch player along the ramp angle
+    const prevRamp = obstacles.find(o =>
+      o.type === 'ramp' && !o.cleared && !o.hit &&
+      Math.abs((p.x + PW/2) - (o.x + o.w)) < p.vx * 0.05 + 8
+    );
+    if (prevRamp) {
+      // Launch velocity: preserve horizontal speed, add upward component from slope
+      const launchSpeed = Math.sqrt(p.vx * p.vx);
+      p.vy = -launchSpeed * Math.sin(prevRamp.angle) * 1.8;
+      p.onGround = false;
+      p.olliePhase = 2;
+      p.coyoteTimer = CFG.coyoteTime;
+      prevRamp.cleared = true;
+    }
+    p.activeRamp = null;
+    p.rampAngle = lerp(p.rampAngle, 0, 0.25);
+  } else {
+    p.activeRamp = null;
+    p.rampAngle = lerp(p.rampAngle, 0, 0.2);
+  }
+
+  // Pit bottom kill — player fell all the way down
+  if (pitBelow && p.y + PH >= GROUND_Y + pitBelow.h) {
+    pitBelow.hit = true;
+    pitRespawnX = pitBelow.x + pitBelow.w + SZ.obstacleRespawnOffset * S;
+    loseLife('FELL IN THE PIT!');
+    return;
+  }
+
+  const groundTop = GROUND_Y-PH-BH-WHEEL_R*2;
+  if (!pitBelow && p.y>=groundTop) {
+    p.y=groundTop;
+    if (!p.onGround) {
+      if (p.trick!==TRICK.NONE&&!p.trickDone) failTrick(p);
+      else if (p.trick!==TRICK.NONE&&p.trickLandWindow) failTrick(p);
+      else if (p.hadGrind) processGrindLanding(p);
+      else processTrickBatch(p);
+      p.onGround=true; p.olliePhase=3; p.ollieTimer=0.1; p.trickFailed=false; p.squishTimer=CFG.squish.landDuration;
+      if (!p.dying) playBuf('land');
+      if (p.jumpBuffer > 0 && !p.dying) { p.jumpBuffer=0; p.olliePhase=0; startOllie(p); }
+    }
+    p.vy=0;
+  } else if (pitBelow && p.onGround) {
+    p.onGround = false;
+    p.vy = 40;
+  }
+
+  // Coyote time: left the ground naturally (not via a jump)
+  if (wasOnGround && !p.onGround && p.olliePhase !== 2) {
+    p.coyoteTimer = CFG.coyoteTime;
+  } else if (p.onGround) {
+    p.coyoteTimer = 0;
+  } else if (p.coyoteTimer > 0) {
+    p.coyoteTimer = Math.max(0, p.coyoteTimer - dt);
+  }
+
+  if (consumeJust('Space')) {
+    if (p.onGround) startOllie(p);
+    else if (p.coyoteTimer > 0 && p.trick === TRICK.NONE) {
+      p.coyoteTimer = 0;
+      p.olliePhase=1; p.ollieTimer=0.06; p.boardNoseAngle=0;
+      p.trickBatch=[]; p.fakieAtJump=p.fakie; p.grindIntent='50-50';
+    }
+    else if (p.trick!==TRICK.NONE&&p.trickDone&&p.trickLandWindow) tryLandTrick(p);
+    else if (p.trick!==TRICK.NONE&&!p.trickDone) failTrick(p);
+    else p.jumpBuffer = CFG.jumpBufferTime; // buffered jump: fires on next landing
+  }
+  if (!p.onGround) {
+    if (consumeJust('KeyK')) startTrick(p,TRICK.KICKFLIP);
+    if (consumeJust('KeyL')) startTrick(p,TRICK.SHOVEIT);
+    if (consumeJust('KeyJ')) startTrick(p,TRICK.T180);
+    if (consumeJust('KeyI')) startTrick(p,TRICK.TREFLIP);
+    if (consumeJust('KeyA')) p.grindIntent='5-0';
+    if (consumeJust('KeyD')) p.grindIntent='NOSE GRIND';
+  }
+
+  if (p.jumpBuffer > 0) p.jumpBuffer = Math.max(0, p.jumpBuffer - dt);
+  updateOllie(p,dt); updateTrick(p,dt);
+
+  if (p.invincibleTimer>0) p.invincibleTimer-=dt;
+  if (p.trick180Cooldown>0) p.trick180Cooldown-=dt;
+  if (p.squishTimer>0) p.squishTimer-=dt;
+
+  if (p.invincibleTimer<=0) {
+    for (const obs of obstacles) {
+      if (obs.cleared||obs.hit) continue;
+      if (obs.type==='ramp'||obs.type==='pit') continue;  // handled by physics
+      if (obs.type==='enemy') {
+        if (!obs.alive||obs.dying||obs===p.grindRail) continue;
+        const px2=p.x+PW, py2=p.y+PH;
+        if (p.x<obs.x+obs.w&&px2>obs.x&&p.y<obs.y+obs.h&&py2>obs.y) {
+          pitRespawnX = obs.x + obs.w + SZ.obstacleRespawnOffset * S;
+          loseLife('CAUGHT BY ENEMY!'); return;
+        }
+        continue;
+      }
+      const px2=p.x+PW, py2=p.y+PH, ox2=obs.x+obs.w;
+      if (p.x>ox2) {
+        if (!obs.isTutorial) obs.cleared=true;
+        if (obs.type==='obstacle') { score+=30; showMsg('+30  CLEARED!',C.cyan); spawnParticles(obs.x+obs.w/2,obs.y,6,C.cyan); }
+        continue;
+      }
+      if (p.x<ox2&&px2>obs.x&&p.y<obs.y+obs.h&&py2>obs.y) {
+        if (obs.type==='rail'||obs.type==='rail-deadly') {
+          if (p.vy<0) continue;
+          if (obs.type==='rail') continue; // safe rail: pass through
+          obs.hit=true; pitRespawnX = obs.x + obs.w + SZ.obstacleRespawnOffset * S; loseLife('HIT THE RAIL!'); return;
+        }
+        obs.hit=true; pitRespawnX = obs.x + obs.w + SZ.obstacleRespawnOffset * S; loseLife('HIT OBSTACLE!'); return;
+      }
+    }
+  }
+  p.grindBoardAngle=lerp(p.grindBoardAngle,0,dt*10);
+  p.grindPlayerShift=lerp(p.grindPlayerShift,0,dt*10);
+
+  if (p.onGround) {
+    p.animTimer+=dt; if(p.animTimer>=1/8){p.animTimer-=1/8;p.animFrame=(p.animFrame+1)%SPRITE_FRAMES;}
+  } else {
+    p.animFrame=0; p.animTimer=0;
+  }
+
+  camX=p.x-160;
+}
+
+// ── Draw helpers ──────────────────────────────────────────────────────────
+function drawBoard(cx, cy, drawnW, drawnH, upsideDown, flippedX, noseLiftArg, tailDipArg, kickSin, pa=1) {
+  const bw=Math.max(1,drawnW), bh=Math.max(1,Math.abs(drawnH));
+  const kick=Math.max(1,4*(bw/BW)), wx=bw/BW;
+  const noseLift=noseLiftArg*3, tailDip=tailDipArg*3;
+  const x0=cx-bw/2, ks=kickSin??0;
+
+  if (upsideDown) {
+    ctx.fillStyle='#9b5e7a';
+    ctx.beginPath(); ctx.moveTo(x0,cy+kick-tailDip); ctx.lineTo(x0+bw,cy+kick+noseLift);
+    ctx.lineTo(x0+bw,cy+kick+noseLift-bh); ctx.lineTo(x0,cy+kick-tailDip-bh); ctx.closePath(); ctx.fill();
+  } else {
+    ctx.fillStyle=flippedX?'#e060a8':C.board;
+    ctx.beginPath(); ctx.moveTo(x0,cy-kick+tailDip); ctx.lineTo(x0+6*wx,cy);
+    ctx.lineTo(x0+bw-6*wx,cy); ctx.lineTo(x0+bw,cy-kick-noseLift);
+    ctx.lineTo(x0+bw,cy-kick-noseLift-bh); ctx.lineTo(x0,cy-kick+tailDip-bh); ctx.closePath(); ctx.fill();
+    if (bw>12) {
+      ctx.fillStyle='rgba(255,255,255,0.12)'; ctx.globalAlpha=Math.max(0,1-Math.abs(ks)*3)*pa;
+      ctx.fillRect(x0+bw*0.28,cy-bh,bw*0.44,bh*0.55); ctx.globalAlpha=pa;
+    }
+  }
+  const bmy=cy-bh/2, ws=Math.max(0,ks), gs=Math.max(0,-ks);
+  if (ws>0.05) {
+    ctx.fillStyle=C.wheel; ctx.globalAlpha=Math.pow(ws,0.2)*pa;
+    const wy1=bmy-WHEEL_R-1, wy2=bmy+WHEEL_R+1;
+    [x0+9*wx,x0+bw-9*wx].forEach(wx2=>{
+      ctx.beginPath();ctx.arc(wx2,wy1,WHEEL_R,0,Math.PI*2);ctx.fill();
+      ctx.beginPath();ctx.arc(wx2,wy2,WHEEL_R,0,Math.PI*2);ctx.fill();
+    }); ctx.globalAlpha=pa;
+  } else if (gs>0.05) {
+    ctx.fillStyle='#44475a'; ctx.globalAlpha=Math.pow(gs,0.2)*pa;
+    ctx.beginPath();
+    if (upsideDown) { ctx.moveTo(x0+3,cy+kick-tailDip-3); ctx.lineTo(x0+bw-3,cy+kick+noseLift-3); ctx.lineTo(x0+bw-3,cy+kick+noseLift-bh+3); ctx.lineTo(x0+3,cy+kick-tailDip-bh+3); }
+    else { ctx.moveTo(x0+3,cy-kick+tailDip+3); ctx.lineTo(x0+6*wx+3,cy-3); ctx.lineTo(x0+bw-6*wx-3,cy-3); ctx.lineTo(x0+bw-3,cy-kick-noseLift+3); ctx.lineTo(x0+bw-3,cy-kick-noseLift-bh+3); ctx.lineTo(x0+3,cy-kick+tailDip-bh+3); }
+    ctx.closePath(); ctx.fill(); ctx.globalAlpha=pa;
+  } else {
+    ctx.fillStyle=C.wheel;
+    if (upsideDown) {
+      ctx.fillStyle='#44475a'; ctx.fillRect(x0+6*wx,cy-bh*0.4,bw-12*wx,bh*0.35);
+      ctx.fillStyle=C.wheel;
+      [x0+9*wx,x0+bw-9*wx].forEach(wx2=>{ctx.beginPath();ctx.arc(wx2,cy-bh-WHEEL_R,WHEEL_R,0,Math.PI*2);ctx.fill();});
+    } else {
+      [x0+9*wx,x0+bw-9*wx].forEach(wx2=>{ctx.beginPath();ctx.arc(wx2,cy+WHEEL_R*0.6,WHEEL_R,0,Math.PI*2);ctx.fill();});
+    }
+  }
+}
+
+
+function drawDraculaBackOfTheHead(headCX, headCY, hw, hh, facingSign, isRotating) {
+  hw = Math.max(1, hw);
+  hh = Math.max(1, hh);
+
+  // Lean head slightly forward in travel direction
+  const lean = facingSign * hw * 0.12;
+  const hcx  = headCX + lean;
+  const x0   = hcx - hw / 2;
+  const y0   = headCY - hh / 2;
+
+  // --- hair----
+  const hairH = hh * 0.55;                 // hair covers top 55% of head height
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(x0, y0 - hairH * 0.6, hw, hh * 1.35);
+
+
+  if (!isRotating) { // we simulate bs 180 and then half cab. During half cab we must not see the face at all
+    // ---Neck and chin ----
+    ctx.fillStyle = '#f8f8f2';
+    ctx.fillRect(x0, y0 + (hh - 2), hw * 0.25, 2);
+    ctx.fillRect(x0, y0 + (hh * 0.35), 2, hh * 0.65);
+  }
+}
+
+// Draw Dracula's face. headCX/headCY = centre of head rect.
+// hw/hh = actual drawn width/height (may be crushed during 180 trick).
+// All features are expressed as fractions of hw/hh so they always fit.
+function drawDraculaFace(headCX, headCY, hw, hh, facingSign) {
+  hw = Math.max(1, hw);
+  hh = Math.max(1, hh);
+
+  // Lean head slightly forward in travel direction
+  const lean = facingSign * hw * 0.12;
+  const hcx  = headCX + lean;
+  const x0   = hcx - hw / 2;
+  const y0   = headCY - hh / 2;
+
+  // ── Skin ────────────────────────────────────────────────────────────────
+  ctx.fillStyle = '#f8f8f2';
+  ctx.fillRect(x0, y0, hw, hh);
+
+  // ── Hair block + widow's peak ───────────────────────────────────────────
+  const hairH = hh * 0.55;                 // hair covers top 55% of head height
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(x0, y0 - hairH * 0.6, hw, hairH * 0.65);  // hair mass above head
+
+  // Widow's peak triangle points down into forehead
+  const peakDepth = hh * 0.28;
+  ctx.beginPath();
+  ctx.moveTo(hcx - hw * 0.28, y0);
+  ctx.lineTo(hcx + hw * 0.28, y0);
+  ctx.lineTo(hcx,             y0 + peakDepth);
+  ctx.closePath(); ctx.fill();
+
+  // Side hair tufts
+  const tuftW = hw * 0.22;
+  ctx.fillRect(x0,          y0,            tuftW, hh * 0.18);
+  ctx.fillRect(x0 + hw - tuftW, y0,        tuftW, hh * 0.18);
+
+  if (hw < 4) return;  // too thin to draw features (mid-180)
+
+  // ── Proportional feature layout ─────────────────────────────────────────
+  // Horizontal: two eyes sit at ±eyeGap from centre, shifted by lean
+  const eyeGap  = hw * 0.20;               // distance from centre to each eye
+  const eyeW    = Math.max(1, hw * 0.18);  // eye rect width
+  const eyeH    = Math.max(1, hh * 0.22);  // eye rect height
+  const eyeY    = y0 + hh * 0.32;          // eye vertical position
+  const shift   = facingSign * hw * 0.06;  // subtle extra shift toward facing
+
+  const leftEyeX  = hcx + shift - eyeGap - eyeW;
+  const rightEyeX = hcx + shift + eyeGap;
+
+  // Eyebrows
+  if (hw > 6) {
+    ctx.fillStyle = '#1a1a2e';
+    const browH = Math.max(1, hh * 0.10);
+    const browY = eyeY - browH - hh * 0.04;
+    // Back brow: flat
+    ctx.fillRect(leftEyeX,          browY,          eyeW,        browH);
+    // Front brow: inner edge dips (menacing scowl)
+    ctx.fillRect(rightEyeX,         browY,          eyeW * 0.5,  browH);
+    ctx.fillRect(rightEyeX + eyeW * 0.45, browY + browH * 0.6, eyeW * 0.55, browH);
+  }
+
+  // Eyes (red)
+  ctx.fillStyle = '#ff5555';
+  ctx.fillRect(leftEyeX,  eyeY, eyeW, eyeH);
+  ctx.fillRect(rightEyeX, eyeY, eyeW, eyeH);
+  // Glints
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(leftEyeX  + 1, eyeY + 1, Math.max(1, eyeW * 0.3), Math.max(1, eyeH * 0.4));
+  ctx.fillRect(rightEyeX + 1, eyeY + 1, Math.max(1, eyeW * 0.3), Math.max(1, eyeH * 0.4));
+
+  // Fangs
+  if (hw > 5) {
+    ctx.fillStyle = '#f8f8f2';
+    const fangW = Math.max(1, hw * 0.12);
+    const fangH = Math.max(1, hh * 0.28);
+    const fangY = y0 + hh;                  // hang below chin
+    ctx.fillRect(hcx + shift - hw * 0.16 - fangW / 2, fangY, fangW, fangH);
+    ctx.fillRect(hcx + shift + hw * 0.06,              fangY, fangW, fangH);
+  }
+}
+
+function drawPlayer(p, pa=1) {
+  const rampAng = p.rampAngle || 0;
+  const cx    = p.x + PW / 2 + p.popOffsetX;
+  const footY = p.y + PH + p.boardDistance;
+  // Rotate whole player around foot pivot when on ramp
+  if (rampAng !== 0) {
+    ctx.save();
+    ctx.translate(cx, p.y + PH + BH + WHEEL_R);
+    ctx.rotate(-rampAng);  // negative = nose-up (canvas Y is flipped)
+    ctx.translate(-cx, -(p.y + PH + BH + WHEEL_R));
+  }
+  const ang   = p.trickAngle;
+
+  // ── Trick-projected dimensions ──────────────────────────────────────────
+  let boardH = BH, boardUpsideDown = false;
+  if (p.trick === TRICK.KICKFLIP) {
+    const c = Math.cos(ang), sinA = Math.abs(Math.sin(ang));
+    boardH = BH + (WHEEL_R * 2 + BH * 2) * sinA;
+    boardUpsideDown = c < 0;
+  }
+
+  let boardW = BW, boardFlipped = false;
+  if (p.trick === TRICK.SHOVEIT || p.trick === TRICK.TREFLIP) {
+    const c = Math.cos(ang);
+    boardW = BW * Math.abs(c); boardFlipped = c < 0;
+  }
+  if (p.trick === TRICK.TREFLIP) {
+    // X axis (kickflip): board height swells as it flips over
+    const sinA = Math.abs(Math.sin(ang));
+    boardH = BH + (WHEEL_R * 2 + BH * 2) * sinA;
+    boardUpsideDown = Math.cos(ang) < 0;
+  }
+
+  // For 180, crush body + head + board width together
+  let bodyW = PW, drawnHeadW = HEAD_W, drawnHeadH = HEAD_H;
+  let body180BW = BW, facingSign = p.bodyScaleX ?? 1;
+  if (p.trick === TRICK.T180) {
+    const c = Math.cos(ang);
+    const t = Math.abs(c);
+    bodyW      = Math.max(2, PW     * t);
+    drawnHeadW = Math.max(2, HEAD_W * t);
+    drawnHeadH = HEAD_H;               // height stays constant
+    body180BW  = Math.max(2, BW     * t);
+    facingSign = c >= 0 ? (p.bodyScaleX ?? 1) : -(p.bodyScaleX ?? 1);
+  }
+
+  const finalBW = p.trick === TRICK.T180                                  ? body180BW
+                : p.trick === TRICK.SHOVEIT || p.trick === TRICK.TREFLIP  ? boardW
+                : BW;
+  const boardCY = footY + BOARD_OFFSET_Y;
+
+  // ── Board ────────────────────────────────────────────────────────────────
+  if (!p.boardDetached) {
+    const ks = (p.trick === TRICK.KICKFLIP || p.trick === TRICK.TREFLIP) ? Math.sin(ang) : 0;
+    const toff = finalBW / 2 - finalBW * 0.2;
+    const pivX = p.grindType === 'NOSE GRIND' ? cx + toff
+               : p.grindType === '5-0'        ? cx - toff : cx;
+    // To emulate real tre flip z-axis tilt
+    const zTilt = p.trick === TRICK.TREFLIP ? Math.sin(ang / 2) * Math.PI * -0.2 : p.grindBoardAngle;
+    ctx.save();
+    ctx.translate(cx, boardCY); ctx.rotate(zTilt); ctx.translate(-cx, -boardCY);
+    drawBoard(cx, boardCY, finalBW, boardH, boardUpsideDown, boardFlipped,
+              p.boardNoseAngle, p.boardTailAngle, ks, pa);
+    ctx.restore();
+  } else {
+    drawBoard(p.boardLostX + PW / 2, p.boardLostY, BW, BH, false, false, 0, 0, 0);
+  }
+
+  // ── Body (cape) ───────────────────────────────────────────────────────────
+  // Squish: compress body+head vertically, anchored at feet
+  // — pre-jump: crouches during wind-up (olliePhase 1)
+  // — landing:  pops on touchdown then springs back
+  let squishY = 1;
+  if (p.squishTimer > 0) {
+    squishY = 1 - Math.sin(p.squishTimer / CFG.squish.landDuration * Math.PI) * CFG.squish.landAmount;
+  } else if (p.olliePhase === 1) {
+    const t = 1 - clamp(p.ollieTimer / 0.06, 0, 1); // 0→1 as wind-up progresses
+    squishY = 1 - t * CFG.squish.jumpAmount;
+  }
+  const squishAnchorY = p.y + PH;
+  if (squishY !== 1) {
+    ctx.save();
+    ctx.translate(cx, squishAnchorY);
+    ctx.scale(1, squishY);
+    ctx.translate(-cx, -squishAnchorY);
+  }
+
+  const bcx = cx + p.grindPlayerShift;
+  const by  = p.y;
+
+  ctx.globalAlpha = pa;
+
+  // ── Sprite (body + head) ─────────────────────────────────────────────────
+  // Scale sprite uniformly to fill the full character height (HEAD_H + PH)
+  const dh = HEAD_H + PH;
+  const dw = dh; // source is square 16×16, so uniform scale
+  // Horizontal crush factor for T180 trick (1 = normal, < 1 = crushed)
+  const crushT = drawnHeadW / HEAD_W;
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.translate(bcx, by);
+  if (p.fakie) ctx.scale(-1, 1);
+  if (crushT < 1) ctx.scale(crushT, 1);
+  if (p.fakie) {
+    ctx.drawImage(
+      vampireBackImg,
+      p.animFrame * SPRITE_STRIDE, 0, SPRITE_SRC_W, SPRITE_SRC_H,
+      -dw / 2, -HEAD_H, dw, dh
+    );
+  } else {
+    ctx.drawImage(
+      vampireGlideImg,
+      p.animFrame * SPRITE_STRIDE, 0, SPRITE_SRC_W, SPRITE_SRC_H,
+      -dw / 2, -HEAD_H, dw, dh
+    );
+  }
+  ctx.restore();
+
+  ctx.globalAlpha = 1;
+  if (squishY !== 1) ctx.restore();
+  if (rampAng !== 0) ctx.restore();
+}
+
+// ── Render ────────────────────────────────────────────────────────────────
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath(); ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+  ctx.lineTo(x+w,y+h-r); ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h); ctx.lineTo(x+r,y+h);
+  ctx.quadraticCurveTo(x,y+h,x,y+h-r); ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y); ctx.closePath();
+}
+
+// ── Parallax background ────────────────────────────────────────────────────
+// Two offscreen buffers, one per layer. Each scrolls at its own speed.
+// buf[0] = far layer  (sky + far mountains + castles)
+// buf[1] = near layer (near mountains only, transparent bg so far shows through)
+
+function seededRand(seed) {
+  let s = seed | 0;
+  s = Math.imul(s ^ (s >>> 16), 0x45d9f3b);
+  s = Math.imul(s ^ (s >>> 16), 0x45d9f3b);
+  s = s ^ (s >>> 16);
+  return (s >>> 0) / 0xffffffff;
+}
+
+function globalPeakH(index, minH, maxH, layerSeed) {
+  return minH + seededRand(index * 2749 + layerSeed * 1031) * (maxH - minH);
+}
+
+const BUF_W = W * 4;
+const BUF_H = H;
+
+// Reusable temp canvas for buffer slide — avoids allocating a new one each time
+const bufTmp = document.createElement('canvas');
+bufTmp.width = BUF_W; bufTmp.height = BUF_H;
+const bufTmpCtx = bufTmp.getContext('2d');
+
+const buf = [0, 1].map(li => {
+  const c = document.createElement('canvas');
+  c.width = BUF_W; c.height = BUF_H;
+  return { canvas: c, ctx: c.getContext('2d'), paintedUpTo: 0, bufOriginWorld: 0, li };
+});
+
+function layerCfg(li) {
+  if (li === 0) {
+    const mid   = (PX.far_minH + PX.far_maxH) / 2;
+    const range = (PX.far_maxH - PX.far_minH) * (1 + PX.far_spikiness * 1.5);
+    return { speed: PX.speed1, color: C.mtn2,
+             minH: mid - range/2, maxH: mid + range/2,
+             segW: PX.tileW / PX.far_peaks, smoothing: PX.far_smoothing, seed: 1,
+             castle: true, castleColor: C.castle2,
+             castleBaseY: GROUND_Y - PX.castle_baseY, castleScale: PX.castle_scale };
+  } else {
+    const mid   = (PX.near_minH + PX.near_maxH) / 2;
+    const range = (PX.near_maxH - PX.near_minH) * (1 + PX.near_spikiness * 1.5);
+    return { speed: PX.speed2, color: C.mtn1,
+             minH: mid - range/2, maxH: mid + range/2,
+             segW: PX.tileW / PX.near_peaks, smoothing: PX.near_smoothing, seed: 2,
+             castle: false };
+  }
+}
+
+// Paint world range [worldX0..worldX1] onto buffer b using cfg.
+// Layer 0 fills the sky opaquely. Layer 1 uses clearRect so its bg is transparent.
+function paintStrip(b, cfg, worldX0, worldX1) {
+  const bc  = b.ctx;
+  const bx0 = worldX0 - b.bufOriginWorld;
+  const bw  = worldX1 - worldX0;
+
+  // Sky: layer 0 fills solid, layer 1 clears to transparent
+  if (b.li === 0) {
+    bc.fillStyle = C.bg2;
+    bc.fillRect(bx0, 0, bw, GROUND_Y);
+  } else {
+    bc.clearRect(bx0, 0, bw, GROUND_Y);
+  }
+
+  // Mountain silhouette
+  const { minH, maxH, segW, smoothing, seed, color } = cfg;
+  const firstIdx = Math.floor(worldX0 / segW) - 1;
+  const lastIdx  = Math.ceil(worldX1  / segW) + 1;
+  const pts = [];
+  for (let i = firstIdx; i <= lastIdx; i++) {
+    pts.push({ x: i * segW - b.bufOriginWorld,
+               y: GROUND_Y - globalPeakH(i, minH, maxH, seed) });
+  }
+
+  bc.fillStyle = color;
+  bc.beginPath();
+  bc.moveTo(pts[0].x, GROUND_Y);
+  if (smoothing < 0.05) {
+    for (const p of pts) bc.lineTo(p.x, p.y);
+  } else {
+    bc.lineTo(pts[0].x, pts[0].y);
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], nb = pts[i + 1];
+      const mx = (a.x + nb.x) / 2, my = (a.y + nb.y) / 2;
+      bc.quadraticCurveTo(a.x, a.y + (my - a.y) * smoothing, mx, my);
+    }
+    const last = pts[pts.length - 1];
+    bc.quadraticCurveTo(last.x, last.y + (GROUND_Y - last.y) * smoothing, last.x, GROUND_Y);
+  }
+  bc.lineTo(pts[pts.length - 1].x, GROUND_Y);
+  bc.closePath();
+  bc.fill();
+
+  // Castles (far layer only)
+  if (!cfg.castle) return;
+  const castleSpacing = segW * 3;
+  const ci0 = Math.floor(worldX0 / castleSpacing) - 1;
+  const ci1 = Math.ceil(worldX1  / castleSpacing) + 1;
+  const { castleColor, castleBaseY, castleScale } = cfg;
+  for (let i = ci0; i <= ci1; i++) {
+    const r0 = seededRand(i * 5381 + 77);
+    const r1 = seededRand(i * 5381 + 78);
+    const r2 = seededRand(i * 5381 + 79);
+    const cx     = i * castleSpacing + r0 * castleSpacing * 0.5 - b.bufOriginWorld;
+    const towerW = (18 + r1 * 38) * castleScale;
+    const towerH = (60 + r2 * 50) * castleScale;
+    const towerY = castleBaseY - towerH;
+    bc.fillStyle = castleColor;
+    bc.fillRect(cx - towerW/2, towerY, towerW, towerH);
+    const merlonW = towerW/5, merlonH = towerH*0.12;
+    for (let m = 0; m < 5; m += 2)
+      bc.fillRect(cx - towerW/2 + m*merlonW, towerY - merlonH, merlonW, merlonH);
+    const spireH = towerH * 0.30;
+    bc.beginPath();
+    bc.moveTo(cx - towerW*0.28, towerY); bc.lineTo(cx + towerW*0.28, towerY);
+    bc.lineTo(cx, towerY - spireH); bc.closePath(); bc.fill();
+    const turretW = towerW*0.30, turretH = towerH*0.55;
+    [-1, 1].forEach(side => {
+      const tx = cx + side*(towerW/2 - turretW*0.3), ty = castleBaseY - turretH;
+      bc.fillRect(tx - turretW/2, ty, turretW, turretH);
+      for (let m = 0; m < 3; m += 2)
+        bc.fillRect(tx - turretW/2 + m*(turretW/3), ty - merlonH*0.8, turretW/3, merlonH*0.8);
+      bc.beginPath();
+      bc.moveTo(tx - turretW*0.5, ty); bc.lineTo(tx + turretW*0.5, ty);
+      bc.lineTo(tx, ty - spireH*0.7); bc.closePath(); bc.fill();
+    });
+    bc.fillStyle = C.bg;
+    bc.fillRect(cx - Math.max(2,towerW*0.06), towerY + towerH*0.35, Math.max(2,towerW*0.12), towerH*0.18);
+  }
+}
+
+function initParallaxBuffers() {
+  for (let li = 0; li < 2; li++) {
+    const b = buf[li];
+    b.bufOriginWorld = 0;
+    b.paintedUpTo    = 0;
+    b.ctx.clearRect(0, 0, BUF_W, BUF_H);
+    paintStrip(b, layerCfg(li), 0, BUF_W);
+    b.paintedUpTo = BUF_W;
+  }
+}
+
+function updateParallaxBuffers() {
+  for (let li = 0; li < 2; li++) {
+    const b      = buf[li];
+    const cfg    = layerCfg(li);
+    const scroll = camX * cfg.speed;
+    const readX  = scroll - b.bufOriginWorld;
+
+    // Extend right edge if within 1.5 screens of painted edge
+    if (readX + W * 1.5 > b.paintedUpTo) {
+      const from = b.paintedUpTo;
+      const to   = Math.min(readX + BUF_W * 0.8, BUF_W);
+      if (to > from) {
+        paintStrip(b, cfg, b.bufOriginWorld + from, b.bufOriginWorld + to);
+        b.paintedUpTo = to;
+      }
+    }
+
+    // Slide buffer origin when we've read past 60% of it
+    if (readX > BUF_W * 0.6) {
+      const shift = Math.floor(readX - W);
+      b.bufOriginWorld += shift;
+      bufTmpCtx.clearRect(0, 0, BUF_W, BUF_H);
+      bufTmpCtx.drawImage(b.canvas, 0, 0);
+      b.ctx.clearRect(0, 0, BUF_W, BUF_H);
+      b.ctx.drawImage(bufTmp, -shift, 0);
+      b.paintedUpTo -= shift;
+      paintStrip(b, cfg, b.bufOriginWorld + b.paintedUpTo, b.bufOriginWorld + BUF_W);
+      b.paintedUpTo = BUF_W;
+    }
+  }
+}
+
+// Blit far layer, then near layer on top (transparent bg composites correctly)
+function drawParallax() {
+  const srcX0 = camX * PX.speed1 - buf[0].bufOriginWorld;
+  const srcX1 = camX * PX.speed2 - buf[1].bufOriginWorld;
+  ctx.drawImage(buf[0].canvas, srcX0, 0, W, GROUND_Y, 0, 0, W, GROUND_Y);
+  ctx.drawImage(buf[1].canvas, srcX1, 0, W, GROUND_Y, 0, 0, W, GROUND_Y);
+}
+
+
+function render() {
+  ctx.fillStyle=C.bg; ctx.fillRect(0,0,W,H);
+  if (gameState==='title')    { drawTitle();    return; }
+  if (gameState==='gameover') { drawGameOver(); return; }
+
+  ctx.save(); ctx.translate(-camX,0);
+
+  const grad=ctx.createLinearGradient(0,0,0,GROUND_Y);
+  grad.addColorStop(0,'#1e2029'); grad.addColorStop(1,'#282a36');
+  ctx.fillStyle=grad; ctx.fillRect(camX,0,W,GROUND_Y);
+
+  // Parallax layers — blitted from offscreen buffers in screen coords
+  ctx.save(); ctx.translate(camX,0); drawParallax(); ctx.restore();
+  const groundBandH = PX.ground_lineH;
+  const visX0 = camX - 20, visX1 = camX + W + 20;
+
+  // Collect visible pits to cut them from the ground strip
+  const visPits = obstacles.filter(o => o.type==='pit' && o.x < visX1 && o.x + o.w > visX0);
+  visPits.sort((a,b) => a.x - b.x);
+
+  // Draw ground in segments, leaving gaps for pits
+  let gx = visX0;
+  for (const pit of visPits) {
+    // Segment before this pit
+    if (pit.x > gx) {
+      ctx.fillStyle=C.ground; ctx.fillRect(gx, GROUND_Y, pit.x-gx, groundBandH);
+      ctx.fillStyle='#3a3d4e'; ctx.fillRect(gx, GROUND_Y, pit.x-gx, 4);
+      ctx.fillStyle=C.bg2; ctx.fillRect(gx, GROUND_Y+groundBandH, pit.x-gx, H-GROUND_Y-groundBandH);
+    }
+    // Pit abyss
+    const abyssGrad = ctx.createLinearGradient(0, GROUND_Y, 0, GROUND_Y + pit.h);
+    abyssGrad.addColorStop(0, C.mtn1); abyssGrad.addColorStop(1, C.mtn2);
+    ctx.fillStyle = abyssGrad;
+    ctx.fillRect(pit.x, GROUND_Y, pit.w, pit.h);
+    gx = pit.x + pit.w;
+  }
+  // Final segment after last pit
+  if (gx < visX1) {
+    ctx.fillStyle=C.ground; ctx.fillRect(gx, GROUND_Y, visX1-gx, groundBandH);
+    ctx.fillStyle='#3a3d4e'; ctx.fillRect(gx, GROUND_Y, visX1-gx, 4);
+    ctx.fillStyle=C.bg2; ctx.fillRect(gx, GROUND_Y+groundBandH, visX1-gx, H-GROUND_Y-groundBandH);
+  }
+
+  for (const obs of obstacles) {
+    if (obs.x+obs.w<camX-20||obs.x>camX+W+20) continue;
+    if (obs.type==='rail'||obs.type==='rail-deadly') {
+      const lh=GROUND_Y-obs.y;
+      const railColor = obs.hit ? '#333' : (obs.type==='rail-deadly' ? C.orange : C.cyan);
+      ctx.fillStyle=railColor;
+      const legW=Math.max(2,3*S|0); ctx.fillRect(obs.x+4*S,obs.y,legW,lh); ctx.fillRect(obs.x+obs.w-4*S-legW,obs.y,legW,lh);
+      ctx.fillRect(obs.x,obs.y,obs.w,obs.h);
+    } else if (obs.type==='ramp') {
+      // Triangle: bottom-left at ground, bottom-right at ground, top-right at ramp peak
+      ctx.fillStyle = C.ground;
+      ctx.beginPath();
+      ctx.moveTo(obs.x,          GROUND_Y);           // bottom-left (foot of ramp)
+      ctx.lineTo(obs.x + obs.w,  GROUND_Y);           // bottom-right (pit edge)
+      ctx.lineTo(obs.x + obs.w,  obs.y);              // top-right (peak)
+      ctx.closePath();
+      ctx.fill();
+      // Edge highlight
+      ctx.strokeStyle = '#3a3d4e';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(obs.x, GROUND_Y);
+      ctx.lineTo(obs.x + obs.w, obs.y);
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    } else if (obs.type==='pit') {
+      // already drawn above as abyss — nothing more needed
+    } else if (obs.type==='enemy') {
+      if (!obs.alive && !obs.dying) continue;
+
+      ctx.globalAlpha = obs.dying ? Math.max(0, obs.deathTimer / obs.deathDuration) : 1;
+
+      const cx     = obs.x + obs.w / 2;
+      const facing = obs.vx >= 0 ? 1 : -1;
+
+      // Scale sprite to match player visual height
+      const dh = (HEAD_H + PH + BH + WHEEL_R * 2) * CFG.enemy.skeleton.scale;
+      const dw = dh * (SKEL_FRAME_W / SKEL_FRAME_H);
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.translate(cx, obs.y + obs.h);
+      if (facing < 0) ctx.scale(-1, 1);
+      ctx.drawImage(skeletonWalkImg,
+        obs.animFrame * SKEL_FRAME_W, 0, SKEL_FRAME_W, SKEL_FRAME_H,
+        -dw / 2, -dh, dw, dh);
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    } else {
+      ctx.fillStyle=obs.hit?'#333':C.obstacle; ctx.fillRect(obs.x,obs.y-15,obs.w,obs.h);
+      ctx.fillStyle=obs.hit?'#444':C.obstacleH; ctx.fillRect(obs.x-2,obs.y-15,obs.w+4,5);
+    }
+  }
+
+  for (const p of particles) { const t=p.life/p.maxLife; ctx.globalAlpha=t; ctx.fillStyle=p.color; ctx.beginPath(); ctx.arc(p.x,p.y,p.r*t,0,Math.PI*2); ctx.fill(); }
+  ctx.globalAlpha=1;
+  drawDeathPieces();
+
+  if (player.alive || (player.dying && gameState === 'tutorial')) {
+    const pa=player.invincibleTimer>0?0.35+0.65*(0.5+0.5*Math.sin(player.invincibleTimer*18)):1;
+    drawPlayer(player,pa);
+  }
+  ctx.restore();
+
+  drawHUD();
+
+  if (flashTimer>0) { ctx.fillStyle=flashColor; ctx.globalAlpha=flashTimer/0.35; ctx.fillRect(0,0,W,H); ctx.globalAlpha=1; }
+  if (screenMsgTimer>0) {
+    ctx.save(); ctx.font=hfb('msgFont'); ctx.textAlign='center';
+    ctx.globalAlpha=Math.min(1,screenMsgTimer); ctx.fillStyle=screenMsgColor||C.text;
+    ctx.fillText(screenMsg,W/2,H/2-40); ctx.restore(); ctx.globalAlpha=1;
+  }
+  if (screenMsgTimer2>0) {
+    ctx.save(); ctx.font=hfb('subMsgFont'); ctx.textAlign='center';
+    ctx.globalAlpha=Math.min(1,screenMsgTimer2); ctx.fillStyle=screenMsgColor2;
+    ctx.fillText(screenMsg2,W/2,H/2-8); ctx.restore(); ctx.globalAlpha=1;
+  }
+
+  drawTouchOverlay();
+  if (gameState === 'tutorial') drawTutorialOverlay();
+
+  // Scene transition: fade to black (tutorial end / teleport) / fade from black (main game start)
+  let transAlpha = 0;
+  if (gameState === 'tutorial' && tutComplete)
+    transAlpha = clamp(1 - tutCompleteTimer / CFG.tutorial.fadeDuration, 0, 1);
+  else if (gameState === 'tutorial' && tutTeleportTimer > 0)
+    transAlpha = clamp(1 - tutTeleportTimer / CFG.tutorial.teleportFadeDuration, 0, 1);
+  else if (gameState === 'tutorial' && tutTeleportFadeIn > 0)
+    transAlpha = tutTeleportFadeIn / CFG.tutorial.teleportFadeDuration;
+  else if (sceneTransitionTimer > 0)
+    transAlpha = sceneTransitionTimer / CFG.tutorial.fadeDuration;
+  if (transAlpha > 0) {
+    ctx.fillStyle = '#000';
+    ctx.globalAlpha = transAlpha;
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1;
+  }
+
+  if (paused) drawPauseOverlay();
+}
+
+function drawTouchOverlay() {
+  if (!player) return;
+  const p=player;
+  const nearRail=!p.onGround&&!p.grinding&&findApproachRail(p);
+
+  // Bottom hint bar
+  const barH=Math.round(HUD.hintBarH*S);
+  ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(0,H-barH,W,barH);
+  ctx.font=hfb('hintBarFont'); ctx.textAlign='center';
+
+  let hint='', hintColor=C.comment;
+  if (p.dying) { hint=''; }
+  else if (p.onGround) { hint='tap to ollie'; }
+  else if (p.trickDone&&p.trickLandWindow) { hint='tap to land!'; hintColor=C.green; }
+  else if (p.trick!==TRICK.NONE) { hint='tap = bail'; hintColor=C.orange; }
+  else if (nearRail) {
+    if (nearRail.type==='rail-deadly') { hint='⚠ DEADLY! ↙ 5-0  ↓ 50-50  ↘ nose grind'; hintColor=C.orange; }
+    else { hint='↙ 5-0  ↓ 50-50  ↘ nose grind'; hintColor=C.cyan; }
+  }
+  else { hint='← shove  ↑ kickflip  → 180  ↓ grind'; }
+
+  ctx.fillStyle=hintColor;
+  ctx.fillText(hint, W/2, H-Math.round(barH*0.25));
+}
+
+function drawPauseBtn() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  roundRect(W - PAUSE_BTN.w, 0, PAUSE_BTN.w, PAUSE_BTN.h, 6); ctx.fill();
+  ctx.fillStyle = paused ? C.green : C.comment;
+  ctx.font = `bold ${Math.round(18*S)}px monospace`;
+  ctx.textAlign = 'center';
+  ctx.fillText(paused ? '▶' : '⏸', W - PAUSE_BTN.w / 2, 24);
+  ctx.restore();
+}
+function drawHUD() {
+  if (gameState !== 'tutorial') {
+    ctx.font=hfb('scoreFont'); ctx.fillStyle=C.text; ctx.textAlign='left';
+    ctx.fillText('SCORE: '+score,14,Math.round(HUD.scoreFont*S)+6);
+    ctx.fillStyle=C.orange; ctx.font=hfb('livesFont');
+    ctx.fillText('❤ x'+lives,14,Math.round((HUD.scoreFont+HUD.livesFont)*S)+6);
+    if (player.fakie) { ctx.fillStyle=C.board; ctx.font=hfb('fakieFont'); ctx.fillText('🛹 Fakie!',14,Math.round((HUD.scoreFont+HUD.livesFont+HUD.fakieFont)*S)+6); }
+
+    const lineMeeterTarget = getScoreToNextLife()
+    const pct=(lineMeeter%lineMeeterTarget)/lineMeeterTarget;
+
+    const nx=Math.floor((Math.floor(lineMeeter/lineMeeterTarget)+1)*lineMeeterTarget) + (lineMeeterPersist - lineMeeter);
+    const hudRight = W - PAUSE_BTN.w - 12;
+    ctx.fillStyle=C.comment; ctx.font=hf('nextLifeFont'); ctx.textAlign='right';
+    ctx.fillText('Next ❤ '+nx, hudRight, Math.round(HUD.nextLifeFont*S)+8);
+    const barW=Math.round(118*S), barH2=Math.round(8*S), barX=hudRight-barW, barY2=Math.round((HUD.nextLifeFont+10)*S);
+    ctx.fillStyle='#44475a'; ctx.fillRect(barX,barY2,barW,barH2);
+    ctx.fillStyle=C.green; ctx.fillRect(barX,barY2,barW*pct,barH2);
+    ctx.fillText(`LINE score: ${lineMeeterPersist}`,hudRight,Math.round((HUD.nextLifeFont+barH2+20)*S)+6);
+  }
+
+
+  if (player.grinding) {
+    ctx.fillStyle=C.cyan; ctx.font=hfb('grindFont'); ctx.textAlign='center';
+    ctx.fillText('⚡ '+player.grindType+'  '+player.grindTime.toFixed(1)+'s', W/2, H/2+50);
+  }
+
+  // TODO: Decide if we need this, because it might be just visual noise
+
+  // Airborne trick hint
+//if (!player.onGround&&!player.grinding) {
+//  if (player.trickDone&&player.trickLandWindow) {
+//    ctx.fillStyle=C.green; ctx.font=hfb('landHintFont'); ctx.textAlign='center';
+//    ctx.fillText('TAP TO LAND!', W/2, H/2 - 80);
+//  } else if (player.trick===TRICK.NONE&&!findApproachRail(player)) {
+//    ctx.fillStyle=C.comment; ctx.font=hf('airHintFont'); ctx.textAlign='center';
+//    ctx.fillText('← shove  ↑ kickflip  → 180', W/2, H/2 - 80);
+//  }
+//}
+  drawPauseBtn();
+}
+
+function drawPauseOverlay() {
+  // Dim background
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.fillRect(0, 0, W, H);
+
+  // Card
+  const cw = Math.min(W - 48, 400), ch = 220;
+  const cx = (W - cw) / 2, cy = (H - ch) / 2;
+  ctx.fillStyle = '#282a36';
+  roundRect(cx, cy, cw, ch, 16); ctx.fill();
+  ctx.strokeStyle = C.cyan; ctx.lineWidth = 2;
+  roundRect(cx, cy, cw, ch, 16); ctx.stroke();
+  ctx.lineWidth = 1;
+
+  // Title
+  ctx.textAlign = 'center';
+  ctx.fillStyle = C.green; ctx.font = `bold ${Math.round(32*S)}px monospace`;
+  ctx.fillText('PAUSED', W / 2, cy + 48);
+
+  // Tip label
+  ctx.fillStyle = C.cyan; ctx.font = `bold ${Math.round(12*S)}px monospace`;
+  ctx.fillText('TIP', W / 2, cy + 80);
+
+  // Tip text — word-wrap into two lines
+  const tip = PAUSE_TIPS[pauseTip];
+  ctx.fillStyle = C.text; ctx.font = `${Math.round(13*S)}px monospace`;
+  const words = tip.split(' '), maxW = cw - 40;
+  let line = '', lines = [];
+  for (const w of words) {
+    const test = line ? line + ' ' + w : w;
+    if (ctx.measureText(test).width > maxW && line) { lines.push(line); line = w; }
+    else line = test;
+  }
+  if (line) lines.push(line);
+  lines.forEach((l, i) => ctx.fillText(l, W / 2, cy + 108 + i * 22));
+
+  // Hint
+  ctx.fillStyle = C.comment; ctx.font = `${Math.round(11*S)}px monospace`;
+  ctx.fillText('Press P or Escape to resume', W / 2, cy + ch - 16);
+}
+
+function drawTitle() {
+  ctx.fillStyle=C.bg; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.fillStyle=C.player; ctx.font=`bold ${Math.round(54*S)}px monospace`;
+  ctx.fillText('SKATER',W/2,130);
+  ctx.fillStyle=C.board; ctx.font=`${Math.round(22*S)}px monospace`;
+  ctx.fillText('Dracula Edition',W/2,168);
+
+  // Controls card
+  const cx=24, cy=Math.round(185*S), cw=W-48, ch=Math.round(370*S);
+  ctx.fillStyle='rgba(0,0,0,0.45)'; roundRect(cx,cy,cw,ch,16); ctx.fill();
+  ctx.strokeStyle=C.comment; ctx.lineWidth=1; ctx.stroke();
+
+  ctx.fillStyle=C.cyan; ctx.font=`bold ${Math.round(15*S)}px monospace`; ctx.textAlign='center';
+  ctx.fillText('CONTROLS',W/2,cy+28);
+
+  const rows=[
+    ['   Tap',              'Ollie / land a flip trick'],
+    ['↑  Swipe Up (air)',   'Kickflip'],
+    ['←  Swipe Left',       'Shove-it'],
+    ['→  Swipe Right',      '180'],
+    ['↓  Swipe Down',       '50-50 grind'],
+    ['↙  Down-Left',        '5-0 grind'],
+    ['↘  Down-Right',       'Nose grind'],
+  ];
+  ctx.font=`${Math.round(13*S)}px monospace`;
+  rows.forEach(([k,v],i)=>{
+    const ry=cy+Math.round(56*S)+i*Math.round(38*S);
+    ctx.fillStyle='rgba(255,255,255,0.06)';
+    if (i%2===0) { roundRect(cx+10,ry-14,cw-20,32,6); ctx.fill(); }
+    ctx.textAlign='left'; ctx.fillStyle=C.orange; ctx.fillText(k,cx+20,ry+6);
+    ctx.textAlign='right'; ctx.fillStyle=C.text; ctx.fillText(v,cx+cw-20,ry+6);
+  });
+
+  // Combo note
+  ctx.fillStyle=C.comment; ctx.font=`${Math.round(11*S)}px monospace`; ctx.textAlign='center';
+  ctx.fillText('Combo: swipe ↑ then ← in same jump!',W/2,cy+ch-10);
+
+  ctx.fillStyle=C.green; ctx.font=`bold ${Math.round(22*S)}px monospace`;
+  ctx.fillText('TAP TO START',W/2,cy+ch+50);
+
+  const tglY = cy+ch+82;
+  ctx.font=`${Math.round(15*S)}px monospace`;
+  ctx.fillStyle = titleSkipTutorial ? C.orange : C.green;
+  ctx.fillText(titleSkipTutorial ? '◀  SKIP TUTORIAL  ▶' : '◀  TUTORIAL: ON  ▶', W/2, tglY);
+  ctx.fillStyle=C.comment; ctx.font=`${Math.round(11*S)}px monospace`;
+  ctx.fillText('swipe ← →  to toggle', W/2, tglY+Math.round(20*S));
+  ctx.fillText('Every '+CFG.SCORE_PER_LIFE+' pts = +1 life', W/2, tglY+Math.round(38*S));
+}
+
+function drawGameOver() {
+  ctx.fillStyle=C.bg; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.fillStyle=C.obstacle; ctx.font=`bold ${Math.round(48*S)}px monospace`; ctx.fillText('GAME OVER',W/2,H/2-50);
+  ctx.fillStyle=C.text; ctx.font=`${Math.round(22*S)}px monospace`; ctx.fillText('Score: '+score,W/2,H/2+10);
+  ctx.fillStyle=C.green; ctx.font=`bold ${Math.round(20*S)}px monospace`; ctx.fillText('TAP to play again',W/2,H/2+60);
+}
+
+function drawTutorialOverlay() {
+  // ── Step progress boxes ──────────────────────────────────────────────────
+  const STEPS = ['1. OLLIE', '2. KICKFLIP', '3. GRIND'];
+  const boxW = Math.round(128 * S), boxH = Math.round(28 * S), gap = Math.round(6 * S);
+  const totalW = STEPS.length * boxW + (STEPS.length - 1) * gap;
+  let bx = Math.round((W - totalW) / 2);
+  const by = Math.round(8 * S);
+
+  STEPS.forEach((name, i) => {
+    const done   = tutComplete || i < tutStep;
+    const active = !tutComplete && i === tutStep;
+    ctx.globalAlpha = done || active ? 1 : 0.45;
+    ctx.fillStyle = done ? C.green : (active ? '#2d3052' : '#23253a');
+    roundRect(bx, by, boxW, boxH, 5); ctx.fill();
+    if (active) {
+      ctx.strokeStyle = C.cyan; ctx.lineWidth = 2;
+      roundRect(bx, by, boxW, boxH, 5); ctx.stroke(); ctx.lineWidth = 1;
+    }
+    ctx.fillStyle = done ? '#1a2614' : (active ? C.cyan : C.comment);
+    ctx.font = `bold ${Math.round(11 * S)}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.fillText((done ? '✓ ' : active ? '▶ ' : '') + name, bx + boxW / 2, by + Math.round(boxH * 0.68));
+    ctx.globalAlpha = 1;
+    bx += boxW + gap;
+  });
+
+  if (tutComplete) {
+    const elapsed  = CFG.tutorial.completeDuration - tutCompleteTimer;
+    const visible  = Math.floor(elapsed * CFG.tutorial.completeBlinks * 2 / CFG.tutorial.completeDuration) % 2 === 0;
+    if (visible) {
+      ctx.save();
+      ctx.font = hfb('subMsgFont');
+      ctx.textAlign = 'center';
+      ctx.fillStyle = C.cyan;
+      ctx.fillText('ENTERING MAIN STAGE...', W / 2, H / 2 + Math.round(30 * S));
+      ctx.restore();
+    }
+    return;
+  }
+
+  // ── Big center instruction ────────────────────────────────────────────────
+  const p = player;
+  const airborne = p && !p.onGround;
+  const titleSz = Math.round(36 * S);
+  const subSz   = Math.round(16 * S);
+  const CY      = Math.round(H * 0.26); // anchor for top of text block
+
+  let title = '', sub = '', color = C.cyan;
+  if (tutStep === 0) {
+    title = 'OLLIE';
+    sub   = 'TAP  /  SPACE  to jump';
+  } else if (tutStep === 1) {
+    title = 'KICKFLIP';
+    sub   = airborne ? 'SWIPE UP  /  K  —  then catch it!' : 'Jump, then  SWIPE UP  /  K';
+    color = airborne ? C.green : C.cyan;
+  } else if (tutStep === 2) {
+    title = 'GRIND';
+    sub   = airborne ? 'SWIPE DOWN  /  S  to grind!' : 'Jump near the cyan rail';
+    color = C.orange;
+  }
+
+  if (title) {
+    const pulse  = 0.78 + 0.22 * Math.sin(performance.now() / 380);
+    const padX   = Math.round(24 * S);
+    const padY   = Math.round(12 * S);
+    const lineGap = Math.round(8 * S);
+    const bgW    = Math.round(310 * S);
+    const bgH    = padY + titleSz + lineGap + subSz + padY;
+    const bgX    = W / 2 - bgW / 2;
+
+    ctx.save();
+    ctx.globalAlpha = 0.6;
+    ctx.fillStyle = '#0d0e1a';
+    roundRect(bgX, CY, bgW, bgH, Math.round(8 * S)); ctx.fill();
+    ctx.restore();
+
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.globalAlpha = pulse;
+    ctx.font = `bold ${titleSz}px monospace`;
+    ctx.fillStyle = color;
+    ctx.fillText(title, W / 2, CY + padY + titleSz);
+    ctx.globalAlpha = 0.9;
+    ctx.font = `${subSz}px monospace`;
+    ctx.fillStyle = C.text;
+    ctx.fillText(sub, W / 2, CY + padY + titleSz + lineGap + subSz);
+    ctx.restore();
+  }
+}
+
+// ── Tutorial helpers ──────────────────────────────────────────────────────
+function tutTeleport() {
+  const np = makePlayer();
+  const isAdvance = tutNextStep >= 0;
+  if (isAdvance) {
+    tutStep = tutNextStep;
+    if (tutNextStep === 2) {
+      // Spawn the tutorial rail now (first time entering grind stage)
+      if (!obstacles.find(o => o.isTutorial)) {
+        obstacles.push({
+          x: 1050, y: GROUND_Y - SZ.railY * S,
+          w: 280, h: SZ.railH * S,
+          type: 'rail', cleared: false, hit: false, isTutorial: true,
+        });
+      }
+      const tutRail = obstacles.find(o => o.isTutorial);
+      np.x = tutRail ? tutRail.x - CFG.tutorial.railApproachDist : TUT_STAGE_X[2];
+    } else {
+      np.x = TUT_STAGE_X[tutNextStep];
+    }
+    tutNextStep = -1;
+  } else {
+    np.x = TUT_STAGE_X[0];
+  }
+  player = np;
+  pitRespawnX = null;
+  camX = np.x - 160;
+  particles = []; deathPieces = [];
+  tutKickflipReady = false;
+  tutKickflipRideTimer = 0;
+  if (!isAdvance) showMsg('TRY again!', C.orange);
+}
+
+// ── Tutorial update ───────────────────────────────────────────────────────
+function updateTutorial(dt) {
+  updateParallaxBuffers();
+
+  // Teleport delay: freeze the world and count down, then teleport
+  if (tutTeleportTimer > 0) {
+    tutTeleportTimer -= dt;
+    updateParticles(dt);
+    if (flashTimer > 0) flashTimer -= dt;
+    if (screenMsgTimer  > 0) screenMsgTimer  -= dt;
+    if (screenMsgTimer2 > 0) screenMsgTimer2 -= dt;
+    if (tutTeleportTimer <= 0) { tutTeleport(); tutTeleportFadeIn = CFG.tutorial.teleportFadeDuration; }
+    return;
+  }
+
+  const wasOnGround = player ? player.onGround : true;
+  const wasGrinding = player ? player.grinding : false;
+
+  updatePlayer(dt);
+  updateParticles(dt);
+  if (!player.dying) updateDeathPieces(dt);
+  if (flashTimer > 0) flashTimer -= dt;
+  if (screenMsgTimer  > 0) screenMsgTimer  -= dt;
+  if (screenMsgTimer2 > 0) screenMsgTimer2 -= dt;
+  if (sceneTransitionTimer > 0) sceneTransitionTimer = Math.max(0, sceneTransitionTimer - dt);
+  if (tutTeleportFadeIn > 0) tutTeleportFadeIn = Math.max(0, tutTeleportFadeIn - dt);
+
+  if (tutComplete) {
+    tutCompleteTimer -= dt;
+    if (tutCompleteTimer <= 0) {
+      sceneTransitionTimer = CFG.tutorial.fadeDuration;
+      gameState = 'playing'; initGame();
+    }
+    return;
+  }
+
+  // Arm the teleport delay instead of instant teleport
+  if (player.dying) { tutTeleportTimer = CFG.tutorial.teleportFadeDuration; return; }
+  const p = player;
+
+  // ── Stage 0: OLLIE ────────────────────────────────────────────────────────
+  if (tutStep === 0) {
+    // Complete when player takes off and lands cleanly
+    if (!wasOnGround && p.onGround && !p.trickFailed) {
+      tutStep = 1;
+      showMsg('GREAT OLLIE!', C.green);
+    }
+  }
+
+  // ── Stage 1: KICKFLIP ─────────────────────────────────────────────────────
+  else if (tutStep === 1) {
+    // Track when a kickflip has been caught mid-air
+    if (!p.onGround && p.trickBatch.includes(TRICK.KICKFLIP)) tutKickflipReady = true;
+    // Reset on new jump or bail
+    if (p.trickFailed || (wasOnGround && !p.onGround)) tutKickflipReady = false;
+    // Complete when landing after a caught kickflip
+    if (tutKickflipReady && !wasOnGround && p.onGround && !p.trickFailed) {
+      tutKickflipRideTimer = CFG.tutorial.kickflipRideTime;
+      tutKickflipReady = false;
+      showMsg('SICK KICKFLIP!', C.green);
+    }
+    if (tutKickflipRideTimer > 0) {
+      tutKickflipRideTimer -= dt;
+      if (tutKickflipRideTimer <= 0) {
+        tutNextStep = 2;
+        tutTeleportTimer = CFG.tutorial.teleportFadeDuration;
+      }
+    }
+  }
+
+  // ── Stage 2: GRIND ────────────────────────────────────────────────────────
+  else if (tutStep === 2) {
+    if (p.grinding && !wasGrinding && p.grindRail && p.grindRail.isTutorial) {
+      tutStep = 3;
+      tutComplete = true;
+      tutCompleteTimer = CFG.tutorial.completeDuration;
+      showMsg('TUTORIAL COMPLETE!', C.green);
+      flashTimer = 0.5; flashColor = 'rgba(80,250,123,0.35)';
+    }
+    // Safety: walked past the rail without grinding
+    const tutRail = obstacles.find(o => o.isTutorial);
+    if (tutRail && p.x > tutRail.x + tutRail.w + 80) {
+      tutTeleport();
+    }
+  }
+}
+
+// ── Update ────────────────────────────────────────────────────────────────
+function update(dt) {
+  if (gameState==='title') {
+    if (consumeJust('ArrowLeft')||consumeJust('ArrowRight')||consumeJust('KeyL')||consumeJust('KeyJ'))
+      titleSkipTutorial = !titleSkipTutorial;
+      localStorage.setItem('skipTutorial', titleSkipTutorial);
+    if (consumeJust('Space')) {
+      if (titleSkipTutorial) { gameState='playing'; initGame(); }
+      else { gameState='tutorial'; initTutorial(); }
+    }
+    return;
+  }
+  if (gameState==='tutorial') { updateTutorial(dt); return; }
+  if (gameState==='gameover') { if(consumeJust('Space')) gameState='title'; return; }
+  updateParallaxBuffers();
+  extendObstacles();
+  updateEnemies(dt);
+  updatePlayer(dt); updateParticles(dt);
+  if (!player.dying) updateDeathPieces(dt);
+  if (sceneTransitionTimer>0) sceneTransitionTimer=Math.max(0,sceneTransitionTimer-dt);
+  if (flashTimer>0) flashTimer-=dt;
+  if (screenMsgTimer>0) screenMsgTimer-=dt;
+  if (screenMsgTimer2>0) screenMsgTimer2-=dt;
+}
+
+// ── Game loop ─────────────────────────────────────────────────────────────
+let lastTime=0;
+function loop(ts) {
+  const dt=Math.min((ts-lastTime)/1000,0.05);
+  lastTime=ts;
+  if ((gameState==='playing'||gameState==='tutorial') &&
+      (consumeJust('Escape')||consumeJust('KeyP'))) {
+    togglePause();
+  }
+  if (!paused) update(dt);
+  render(); clearJust();
+  requestAnimationFrame(loop);
+}
+initParallaxBuffers();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
