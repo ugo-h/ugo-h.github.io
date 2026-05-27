@@ -19,6 +19,12 @@
       align-items: center;
     }
     canvas { display: block; }
+    @media (min-width: 601px) and (orientation: landscape) {
+      canvas {
+        border-radius: 24px;
+        box-shadow: 0 0 60px rgba(0,0,0,0.7), 0 0 0 2px #44475a;
+      }
+    }
   </style>
 </head>
 <body>
@@ -154,17 +160,34 @@
   "trick180Cooldown": 0.2,
   "powerup": {
     "persistent": true,
-    "helmet": {
-      "speedMult":   1.05,
-      "jumpVelMult": 1.08
-    },
-    "beer": {},
-    "glasses": {
-      "shoveitSpeedMult": 2.0,
-      "shoveitAirBoost":  -120
-    },
-    "eye": {}
-
+    "items": {
+      "helmet": {
+        "icon": "skate_helmet.png", "iconBack": "skate_helmet-back.png",
+        "hudColor": "green", "hudDesc": "speed\u2191 ollie\u2191",
+        "pickupMsg": "HELMET!  speed\u2191  ollie\u2191",
+        "playerLayer": 2,
+        "stats": { "moveSpeedMult": 1.05, "jumpVelMult": 1.08 }
+      },
+      "glasses": {
+        "icon": "skate_glasses.png",
+        "hudColor": "purple", "hudDesc": "shove-it speed\u2191 air\u2191",
+        "pickupMsg": "GLASSES!  shove-it speed\u2191 air\u2191",
+        "playerLayer": 1,
+        "trickStats": { "SHOVEIT": { "speedMult": 2.0, "airBoost": -120 } }
+      },
+      "eye": {
+        "icon": "normal_eye.png",
+        "hudColor": "cyan", "hudDesc": "tre-flip unlocked",
+        "pickupMsg": "EYE!  tre-flip unlocked",
+        "unlocks": ["TREFLIP"]
+      },
+      "beer": {
+        "icon": "beer.png",
+        "hudColor": "orange", "hudDesc": "chain same tricks",
+        "pickupMsg": "BEER!  chain same tricks",
+        "mechanics": ["multiFlip"]
+      }
+    }
   },
   "tutorial": {
     "completeDuration": 5.0,
@@ -194,16 +217,12 @@ vampireGlideImg.src = 'VampireFront.png';
 vampireBackImg.src = 'VampireBackAlt.png';
 const skeletonWalkImg = new Image();
 skeletonWalkImg.src = 'Skeleton_walk.png';
-const helmetImg = new Image();
-helmetImg.src = 'skate_helmet.png';
-const helmetBackImg = new Image();
-helmetBackImg.src = 'skate_helmet-back.png';
-const glassesImg = new Image();
-glassesImg.src = 'skate_glasses.png';
-const beerImg = new Image();
-beerImg.src = 'beer.png';
-const eyeImg = new Image();
-eyeImg.src = 'normal_eye.png';
+const powerupImages = {};
+for (const [key, item] of Object.entries(CFG.powerup.items)) {
+  const front = new Image(); front.src = item.icon;
+  powerupImages[key] = { front };
+  if (item.iconBack) { const back = new Image(); back.src = item.iconBack; powerupImages[key].back = back; }
+}
 const SKEL_FRAMES   = CFG.enemy.skeleton.frames;
 const SKEL_FRAME_W  = CFG.enemy.skeleton.frameW;
 const SKEL_FRAME_H  = CFG.enemy.skeleton.frameH;
@@ -274,10 +293,24 @@ let touchScaleX = 1, touchScaleY = 1;
 function resizeCanvas() {
   const sw = window.innerWidth;
   const sh = window.innerHeight;
-  canvas.style.width  = sw + 'px';
-  canvas.style.height = sh + 'px';
-  touchScaleX = W / sw;
-  touchScaleY = H / sh;
+  // Desktop: show game in a phone-sized area; mobile: fill the screen
+  const isDesktop = sw > 600 && sw > sh * 0.8;
+  let displayW, displayH;
+  if (isDesktop) {
+    const aspect = W / H;
+    displayH = Math.min(sh * 0.95, H);
+    displayW = displayH * aspect;
+    if (displayW > W) { displayW = W; displayH = H; }
+    displayW = Math.round(displayW);
+    displayH = Math.round(displayH);
+  } else {
+    displayW = sw;
+    displayH = sh;
+  }
+  canvas.style.width  = displayW + 'px';
+  canvas.style.height = displayH + 'px';
+  touchScaleX = W / displayW;
+  touchScaleY = H / displayH;
 }
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
@@ -358,7 +391,7 @@ canvas.addEventListener('touchend', e => {
 
     if (dy < 0) {
       // Upward swipe → kickflip (pure up) or tre-flip (up-right diagonal) if airborne
-      const beerKickflip = player && player.powerups.beer && !player.onGround &&
+      const beerKickflip = player && hasMechanic(player,'multiFlip') && !player.onGround &&
                            (player.trick === TRICK.KICKFLIP || player.trick === TRICK.TREFLIP);
       if (player && !player.onGround && (player.trick === TRICK.NONE || beerKickflip)) {
         if (diagonal && dx > 0) fireKey('KeyI'); // up-right = tre-flip
@@ -383,7 +416,7 @@ canvas.addEventListener('touchend', e => {
         }
       }
     } else if (pureHorizontal) {
-      const beerShoveIt = player && player.powerups.beer && !player.onGround && player.trick === TRICK.SHOVEIT;
+      const beerShoveIt = player && hasMechanic(player,'multiFlip') && !player.onGround && player.trick === TRICK.SHOVEIT;
       if (dx < 0 && (player && !player.onGround && (player.trick === TRICK.NONE || beerShoveIt)))
         fireKey('KeyL'); // swipe left = shove-it
       else if (dx > 0) fireKey('KeyJ'); // swipe right = 180
@@ -424,6 +457,34 @@ const WHEEL_R        = SZ.wheelR        * S;
 const GRIND_BOARD_TILT   = 0.45;
 const GRIND_PLAYER_SHIFT = SZ.grindShift * S;
 const TRICK = { NONE: 0, KICKFLIP: 1, SHOVEIT: 2, T180: 3, TREFLIP: 4 };
+const TRICK_NAME = { 1:'KICKFLIP', 2:'SHOVEIT', 3:'T180', 4:'TREFLIP' };
+
+// ── Powerup helpers ──────────────────────────────────────────────────────────
+function getPowerupStatMult(p, statKey) {
+  return Object.keys(p.powerups).reduce((v, k) =>
+    p.powerups[k] ? v * (CFG.powerup.items[k]?.stats?.[statKey] ?? 1) : v, 1);
+}
+function getTrickStats(p, trickType) {
+  const name = TRICK_NAME[trickType] || '';
+  let speedMult = 1, airBoost = 0;
+  for (const k of Object.keys(p.powerups)) {
+    if (!p.powerups[k]) continue;
+    const ts = CFG.powerup.items[k]?.trickStats?.[name];
+    if (ts) { speedMult *= (ts.speedMult ?? 1); airBoost += (ts.airBoost ?? 0); }
+  }
+  return { speedMult, airBoost };
+}
+function hasMechanic(p, name) {
+  return Object.keys(p.powerups).some(k =>
+    p.powerups[k] && CFG.powerup.items[k]?.mechanics?.includes(name));
+}
+function hasTrickUnlock(p, trickName) {
+  return Object.keys(p.powerups).some(k =>
+    p.powerups[k] && CFG.powerup.items[k]?.unlocks?.includes(trickName));
+}
+function applyPowerupSpeed(p) {
+  p.vx = CFG.MOVE_SPEED * getPowerupStatMult(p, 'moveSpeedMult');
+}
 
 // Helper: scaled HUD font string
 const hf  = (key) => `${Math.round(HUD[key] * S)}px monospace`;
@@ -479,7 +540,7 @@ function makePlayer() {
     trick180Cooldown: 0,
     squishTimer: 0,
     animTimer: 0, animFrame: 0,
-    powerups: { helmet: 0, glasses: 0, eye: 0, beer: 0 },
+    powerups: Object.fromEntries(Object.keys(CFG.powerup.items).map(k => [k, false])),
     beerFlipCount: 1, beerBaseTarget: 0,
   };
 }
@@ -813,8 +874,8 @@ function startTrick(p, type) {
     if (p.trickDone && p.trickLandWindow) tryLandTrick(p); // auto-catch completed trick
     else { failTrick(p); return; }                         // bail mid-trick, same as Space
   }
-  // Beer: re-swipe same trick type extends the rotation target (double/triple flip)
-  if (p.powerups.beer && p.trick !== TRICK.NONE && type === p.trick) {
+  // multiFlip mechanic: re-swipe same trick type extends the rotation target
+  if (hasMechanic(p, 'multiFlip') && p.trick !== TRICK.NONE && type === p.trick) {
     p.beerFlipCount++;
     p.trickTarget += p.beerBaseTarget;
     p.trickDone = false; p.trickLandWindow = false;
@@ -831,10 +892,9 @@ function startTrick(p, type) {
   else if (type===TRICK.TREFLIP)  { p.trickTarget=Math.PI*2; p.trickSpeed=Math.PI*4.5;  p.trickAxis='treflip'; playBuf('turn', 0.125); }
   p.beerBaseTarget = p.trickTarget;
   if (p.fakie) p.trickSpeed *= CFG.fakie.trickSpeedMult;
-  if (p.powerups.glasses > 0 && type === TRICK.SHOVEIT) {
-    p.trickSpeed *= CFG.powerup.glasses.shoveitSpeedMult;
-    p.vy = Math.min(p.vy, p.vy + CFG.powerup.glasses.shoveitAirBoost);
-  }
+  const ts = getTrickStats(p, type);
+  if (ts.speedMult !== 1) p.trickSpeed *= ts.speedMult;
+  if (ts.airBoost  !== 0) p.vy = Math.min(p.vy, p.vy + ts.airBoost);
 
   // Air boost: extend the jump, diminishing with each trick in the combo
   const base = TRICK_AIR_BOOST[type] ?? -150;
@@ -940,8 +1000,7 @@ function updateOllie(p, dt) {
     p.boardNoseAngle=lerp(0,0.4,t); p.boardTailAngle=lerp(0,-0.15,t);
     p.boardDistance=lerp(0,10,t); p.popOffsetX=lerp(0,5*(p.fakie?4:-1),t);
     if (p.ollieTimer<=0) {
-      const helmetMult = p.powerups.helmet > 0 ? CFG.powerup.helmet.jumpVelMult : 1;
-      const jumpMult = (p.fakie ? CFG.fakie.jumpMult : 1) * helmetMult;
+      const jumpMult = (p.fakie ? CFG.fakie.jumpMult : 1) * getPowerupStatMult(p, 'jumpVelMult');
       if (p.activeRamp) {
         // Normal jump + extra upward boost from ramp slope
         const ang = p.activeRamp.angle;
@@ -1021,7 +1080,7 @@ function updatePlayer(dt) {
       np.y=GROUND_Y-PH-BH; pitRespawnX=null;
       if (CFG.powerup.persistent) {
         np.powerups = { ...p.powerups };
-        if (np.powerups.helmet)  np.vx = CFG.MOVE_SPEED * CFG.powerup.helmet.speedMult;
+        applyPowerupSpeed(np);
       }
       np.invincibleTimer=3; player=np; deathPieces=[]; screenMsg='';
     }
@@ -1067,31 +1126,14 @@ function updatePlayer(dt) {
       spawnEnemyBurst(rail.x, rail.y, rail.w, rail.h);
       spawnParticles(p.x+PW/2, p.y, 12, C.cyan);
       flashTimer=0.15; flashColor=C.flash;
-      const available = [];
-      if (!p.powerups.helmet)  available.push('helmet');
-      if (!p.powerups.glasses) available.push('glasses');
-      if (!p.powerups.eye)     available.push('eye');
-      if (!p.powerups.beer)    available.push('beer');
+      const available = Object.keys(CFG.powerup.items).filter(k => !p.powerups[k]);
       if (available.length) {
         const pick = available[Math.floor(Math.random() * available.length)];
-        if (pick === 'helmet') {
-          p.powerups.helmet = true;
-          if (!acquiredPowerups.includes('helmet')) acquiredPowerups.push('helmet');
-          p.vx = CFG.MOVE_SPEED * CFG.powerup.helmet.speedMult;
-          showMsg('HELMET!  speed\u2191  ollie\u2191', C.green);
-        } else if (pick === 'glasses') {
-          p.powerups.glasses = true;
-          if (!acquiredPowerups.includes('glasses')) acquiredPowerups.push('glasses');
-          showMsg('GLASSES!  shove-it speed\u2191 air\u2191', C.purple);
-        } else if (pick === 'eye') {
-          p.powerups.eye = true;
-          if (!acquiredPowerups.includes('eye')) acquiredPowerups.push('eye');
-          showMsg('EYE!  tre-flip unlocked', C.cyan);
-        } else {
-          p.powerups.beer = true;
-          if (!acquiredPowerups.includes('beer')) acquiredPowerups.push('beer');
-          showMsg('BEER!  chain same tricks', C.orange);
-        }
+        p.powerups[pick] = true;
+        if (!acquiredPowerups.includes(pick)) acquiredPowerups.push(pick);
+        applyPowerupSpeed(p);
+        const item = CFG.powerup.items[pick];
+        showMsg(item.pickupMsg || pick.toUpperCase() + '!', C[item.hudColor]);
       }
       p.fakieAtJump=p.fakie; p.vy=CFG.enemy.killBoostVY;
       p.onGround=false; p.olliePhase=2; p.trickFailed=false;
@@ -1238,7 +1280,7 @@ function updatePlayer(dt) {
     if (consumeJust('KeyK')) startTrick(p,TRICK.KICKFLIP);
     if (consumeJust('KeyL')) startTrick(p,TRICK.SHOVEIT);
     if (consumeJust('KeyJ')) startTrick(p,TRICK.T180);
-    if (consumeJust('KeyI') && p.powerups.eye) startTrick(p,TRICK.TREFLIP);
+    if (consumeJust('KeyI') && hasTrickUnlock(p,'TREFLIP')) startTrick(p,TRICK.TREFLIP);
     if (consumeJust('KeyA')) p.grindIntent='5-0';
     if (consumeJust('KeyD')) p.grindIntent='NOSE GRIND';
   }
@@ -1560,8 +1602,14 @@ function drawPlayer(p, pa=1) {
     );
   }
   const equipLayers = [];
-  if (p.powerups.glasses > 0) equipLayers.push({ img: glassesImg, z: 1 });
-  if (p.powerups.helmet  > 0) equipLayers.push({ img: p.fakie ? helmetBackImg : helmetImg, z: 2 });
+  for (const [k, active] of Object.entries(p.powerups)) {
+    if (!active) continue;
+    const item = CFG.powerup.items[k];
+    if (item?.playerLayer != null) {
+      const imgs = powerupImages[k];
+      equipLayers.push({ img: p.fakie && imgs.back ? imgs.back : imgs.front, z: item.playerLayer });
+    }
+  }
   equipLayers.sort((a, b) => a.z - b.z);
   for (const layer of equipLayers)
     ctx.drawImage(layer.img, 0, 0, 16, 16, -dw / 2, -HEAD_H, dw, dh);
@@ -1953,29 +2001,14 @@ function drawHUD() {
     if (player.fakie) { leftY += Math.round(HUD.fakieFont*S); ctx.fillStyle=C.board; ctx.font=hfb('fakieFont'); ctx.fillText('🛹 Fakie!',14, leftY); }
     const ph = Math.round(HUD.powerupFont*S);
     ctx.imageSmoothingEnabled = false;
-    if (player.powerups.helmet > 0) {
+    for (const [k, active] of Object.entries(player.powerups)) {
+      if (!active) continue;
+      const item = CFG.powerup.items[k];
+      const imgs = powerupImages[k];
       leftY += ph + 4;
-      ctx.drawImage(player.fakie ? helmetBackImg : helmetImg, 0, 0, 16, 16, 14, leftY - ph + 2, ph, ph);
-      ctx.fillStyle=C.green; ctx.font=hf('powerupFont');
-      ctx.fillText('speed\u2191 ollie\u2191', 14 + ph + 4, leftY);
-    }
-    if (player.powerups.glasses > 0) {
-      leftY += ph + 4;
-      ctx.drawImage(glassesImg, 0, 0, 16, 16, 14, leftY - ph + 2, ph, ph);
-      ctx.fillStyle=C.purple; ctx.font=hf('powerupFont');
-      ctx.fillText('shove-it speed\u2191 air\u2191', 14 + ph + 4, leftY);
-    }
-    if (player.powerups.eye > 0) {
-      leftY += ph + 4;
-      ctx.drawImage(eyeImg, 0, 0, 16, 16, 14, leftY - ph + 2, ph, ph);
-      ctx.fillStyle=C.cyan; ctx.font=hf('powerupFont');
-      ctx.fillText('tre-flip unlocked', 14 + ph + 4, leftY);
-    }
-    if (player.powerups.beer > 0) {
-      leftY += ph + 4;
-      ctx.drawImage(beerImg, 0, 0, 16, 16, 14, leftY - ph + 2, ph, ph);
-      ctx.fillStyle=C.orange; ctx.font=hf('powerupFont');
-      ctx.fillText('chain same tricks', 14 + ph + 4, leftY);
+      ctx.drawImage(player.fakie && imgs.back ? imgs.back : imgs.front, 0, 0, 16, 16, 14, leftY - ph + 2, ph, ph);
+      ctx.fillStyle=C[item.hudColor]; ctx.font=hf('powerupFont');
+      ctx.fillText(item.hudDesc, 14 + ph + 4, leftY);
     }
 
     const lineMeeterTarget = getScoreToNextLife()
@@ -2127,11 +2160,10 @@ function drawGameOver() {
     ctx.fillText('ITEMS COLLECTED', W/2, cy); cy += Math.round(xs*1.4);
     const iconSz = Math.round(xs*1.1);
     const ITEMS = [
-      { key:'helmet',  img: helmetImg,  label:'Helmet'  },
-      { key:'glasses', img: glassesImg, label:'Glasses' },
-      { key:'eye',  img: eyeImg,  label:'Eye'  },
-      { key:'beer', img: beerImg, label:'Beer' },
-    ].filter(it => acquiredPowerups.includes(it.key));
+    ...Object.keys(CFG.powerup.items)
+        .filter(k => acquiredPowerups.includes(k))
+        .map(k => ({ key: k, img: powerupImages[k].front, label: k[0].toUpperCase()+k.slice(1) }))
+    ];
     const spacing = Math.round(iconSz*1.1 + 60*S);
     const rowW = ITEMS.length * spacing - Math.round(10*S);
     let ix = W/2 - rowW/2;
